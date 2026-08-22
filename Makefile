@@ -1,5 +1,6 @@
-.PHONY: all build deps image migrate test vet sec vulncheck format unused release
+.PHONY: all build deps image migrate test test-coverage vet sec vulncheck format unused release
 .PHONY: check-gosec check-govulncheck check-oapi-codegen check-staticcheck check-go-version
+.PHONY: db-up db-down db-status db-create db-drop db-migrate db-setup db-reset db-psql db-schema server
 CHECK_FILES ?= ./...
 
 ifdef RELEASE_VERSION
@@ -37,6 +38,27 @@ TOOL_TARGETS = \
 	$(TOOL_BIN_DIR)/staticcheck \
 	$(TOOL_BIN_DIR)/govulncheck
 
+# Database used by the db-* targets and by "make test".
+#
+# By default these manage a repo-local PostgreSQL in $(PGDATA_DIR) and need no
+# Docker. Point PGHOST/PGPORT at a server you already run and they will use
+# that instead -- but note that the test suite reads hack/test.env, and
+# confload loads it with godotenv.Overload, so the file wins over the
+# environment: changing PGPORT alone will not move the tests.
+PGHOST ?= 127.0.0.1
+PGPORT ?= 5432
+PGSUPERUSER ?= postgres
+PGDATA_DIR ?= .postgres
+PG_ENV = PGHOST=$(PGHOST) PGPORT=$(PGPORT) PGDATA_DIR=$(PGDATA_DIR)
+PG_SUPERUSER_URL = postgres://$(PGSUPERUSER)@$(PGHOST):$(PGPORT)/postgres
+# psql is not on PATH on every platform, so ask the script where it lives.
+PSQL = "$$(./hack/postgres.sh bindir)/psql"
+
+SCHEMA_FILE ?= schema.sql
+
+# Set to 0 to stop "make test" and "make server" preparing a database first.
+DB_AUTO_SETUP ?= 1
+DB_SETUP_DEP = $(if $(filter 1,$(DB_AUTO_SETUP)),db-setup)
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -72,13 +94,16 @@ deps: ## Install dependencies.
 	@go mod download
 	@go mod verify
 
+# What CI runs. Uses test-coverage rather than test: it needs coverage.out for
+# coveralls and the coverage gate, and it brings its own database, so it must
+# not depend on the db-* targets.
 release-test: \
 	check-go-version \
 	vet \
 	static \
 	sec \
 	vulncheck \
-	test
+	test-coverage
 
 release: $(RELEASE_ARCHIVES)
 
@@ -112,9 +137,51 @@ migrate_dev: ## Run database migrations for development.
 migrate_test: ## Run database migrations for test.
 	hack/migrate.sh postgres
 
-test: auth ## Run tests.
+db-up: ## Start PostgreSQL for development (no Docker needed).
+	@$(PG_ENV) ./hack/postgres.sh start
+
+db-down: ## Stop the PostgreSQL started by db-up.
+	@$(PG_ENV) ./hack/postgres.sh stop
+
+db-status: ## Report whether PostgreSQL is running.
+	@$(PG_ENV) ./hack/postgres.sh status
+
+db-create: db-up ## Create the auth schema and the roles it needs.
+	@$(PSQL) -v ON_ERROR_STOP=1 -q -f hack/init_postgres.sql "$(PG_SUPERUSER_URL)"
+
+db-drop: db-up ## Drop the auth schema and the roles it needs.
+	@$(PSQL) -v ON_ERROR_STOP=1 -q -f hack/drop_postgres.sql "$(PG_SUPERUSER_URL)"
+
+db-migrate: db-create ## Apply database migrations.
+	@hack/migrate.sh postgres
+
+db-setup: db-migrate ## Start PostgreSQL, create the schema and migrate it.
+
+db-reset: db-drop db-setup ## Drop everything and rebuild from the migrations.
+
+db-psql: db-up ## Open a psql shell on the development database.
+	@$(PSQL) "$(PG_SUPERUSER_URL)"
+
+# The dump is committed, so it has to be reproducible. Two things in pg_dump's
+# output are not: the "Dumped from/by" banner changes with the server and
+# client patch version, and \restrict carries a token that is randomly
+# generated on every run. Both are noise here, so drop them.
+db-schema: db-migrate ## Dump the auth schema to $(SCHEMA_FILE).
+	@"$$(./hack/postgres.sh bindir)/pg_dump" \
+		--schema-only --schema=auth "$(PG_SUPERUSER_URL)" \
+		| grep -vE '^(-- Dumped |\\(un)?restrict )' > $(SCHEMA_FILE)
+	@echo "wrote $(SCHEMA_FILE)"
+
+test: $(DB_SETUP_DEP) ## Run tests.
+	go test -failfast $(CHECK_FILES) -p 1 -race -count=1
+
+test-coverage: auth ## Run tests with coverage and enforce the coverage gate.
 	go test -failfast $(CHECK_FILES) -coverprofile=coverage.out -coverpkg ./... -p 1 -race -v -count=1
 	./hack/coverage.sh
+
+server: auth $(DB_SETUP_DEP) ## Run the auth server against .env.
+	@test -f .env || { echo 'No .env found. Run: cp example.env .env'; exit 1; }
+	./auth
 
 vet: # Vet the code
 	go vet $(CHECK_FILES)

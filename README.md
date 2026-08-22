@@ -25,17 +25,22 @@ If you wish to contribute to the project, please refer to the [contributing guid
 
 ## Quick Start
 
-Create a `.env` file to store your own custom environment variables. See [`example.env`](example.env)
-
-1. Start the local Postgres database in a Postgres container: `docker-compose -f docker-compose-dev.yml up postgres`
-2. Build the auth binary: `make build` . You should see an output like this:
+With Go and PostgreSQL installed:
 
 ```bash
-go build -ldflags "-X github.com/supabase/auth/cmd.Version=`git rev-parse HEAD`"
-GOOS=linux GOARCH=arm64 go build -ldflags "-X github.com/supabase/auth/cmd.Version=`git rev-parse HEAD`" -o gotrue-arm64
+cp example.env .env   # your configuration; see example.env for every option
+make db-setup         # start PostgreSQL, create the auth schema, migrate it
+make server           # build and run the server
 ```
 
-3. Execute the auth binary: `./auth`
+Visit the [health check endpoint](http://localhost:9999/health) to confirm auth
+is running, and `make test` to run the test suite.
+
+None of this needs Docker. `make db-setup` runs a PostgreSQL that belongs to
+this checkout, storing its data in `.postgres/`; `make db-down` stops it. If a
+PostgreSQL is already listening on port 5432, that one is used instead.
+
+Run `make help` for the full list of commands.
 
 ### If you have Docker installed
 

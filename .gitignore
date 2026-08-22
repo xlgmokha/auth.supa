@@ -22,3 +22,4 @@ www/node_modules
 npm-debug.log
 .data
 tmp
+.postgres/

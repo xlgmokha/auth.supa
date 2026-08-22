@@ -8,13 +8,39 @@ Please help us keep all our projects open and inclusive. Kindly follow our [Code
 
 ## Quick Start
 
-Auth has a development container setup that makes it easy to get started contributing. This setup only requires that [Docker](https://www.docker.com/get-started) is setup on your system. The development container setup includes a PostgreSQL container with migrations already applied and a container running GoTrue that will perform a hot reload when changes to the source code are detected.
+With Go and PostgreSQL installed, this is the whole setup:
 
-If you would like to run Auth locally or learn more about what these containers are doing for you, continue reading the [Setup and Tooling](#setup-and-tooling) section below. Otherwise, you can skip ahead to the [How To Verify that GoTrue is Available](#how-to-verify-that-auth-is-available) section to learn about working with and developing GoTrue.
+```bash
+make db-setup   # starts PostgreSQL, creates the auth schema, runs migrations
+make test       # runs the test suite
+```
+
+`make db-setup` needs no Docker. It runs a PostgreSQL cluster that belongs to
+this checkout: the data lives in `.postgres/`, no system-wide PostgreSQL is
+touched, and `make db-down` stops it again. It finds the PostgreSQL binaries
+itself on Debian/Ubuntu and Homebrew; set `PG_BIN` if yours live elsewhere.
+
+If a PostgreSQL is already listening on port 5432 -- your own, or the container
+from `docker-compose-dev.yml` -- that one is used as-is and nothing is started.
+
+To run the server:
+
+```bash
+cp example.env .env
+make server
+```
+
+`make test` prepares the database for you. Set `DB_AUTO_SETUP=0` to stop it
+doing so when you are managing the database yourself.
+
+A full and up to date list of commands can be found in the project's `Makefile`
+or by running `make help`.
+
+### Using the development containers instead
+
+Auth also has a development container setup, which requires [Docker](https://www.docker.com/get-started). It includes a PostgreSQL container with migrations already applied and a container running GoTrue that will perform a hot reload when changes to the source code are detected.
 
 Before using the containers, you will need to make sure an `.env.docker` file exists by making a copy of `example.docker.env` and configuring it for your needs. The set of env vars in `example.docker.env` only contain the necessary env vars for auth to start in a docker environment. For the full list of env vars, please refer to `example.env` and copy over the necessary ones into your `.env.docker` file.
-
-The following are some basic commands. A full and up to date list of commands can be found in the project's `Makefile` or by running `make help`.
 
 ### Starting the containers
 
@@ -93,25 +119,24 @@ To complete installation, you will:
 
 #### Installation Steps
 
-1. Start Docker
-2. To install the PostgreSQL Docker image, run:
+1. Start PostgreSQL. Either run it locally, which needs no Docker:
 
 ```zsh
-# Builds the postgres image
-docker-compose -f docker-compose-dev.yml build postgres
+make db-up
+```
 
-# Runs the postgres container
+Or run it in a container:
+
+```zsh
 docker-compose -f docker-compose-dev.yml up postgres
 ```
 
 You should then see in Docker that `auth-postgres-1` is running on `port: 5432`.
 
-> **Important** If you happen to already have a local running instance of Postgres running on the port `5432` because you
-> may have installed via [homebrew on macOS](https://formulae.brew.sh/formula/postgresql) then be certain to stop the process using:
->
-> - `brew services stop postgresql`
->
-> If you need to run the test environment on another port, you will need to modify several configuration files to use a different custom port.
+> **Important** If you already have a local PostgreSQL on port `5432` -- for example
+> from [homebrew on macOS](https://formulae.brew.sh/formula/postgresql) -- the container will
+> not be able to bind the port. Either stop it with `brew services stop postgresql`, or skip
+> the container entirely and use `make db-up`, which reuses whatever is already listening.
 
 3. Next compile the Auth binary:
 
@@ -383,54 +408,62 @@ make migrate_test
 
 Currently, we don't use a separate test database, so the same database created when installing Auth to run locally is used.
 
-The following commands should help in setting up a database and running the tests:
-
 ```sh
-# Runs the database in a docker container
-$ docker-compose -f docker-compose-dev.yml up postgres
-
-# Applies the migrations to the database
-$ make migrate_test
+# Starts PostgreSQL, creates the auth schema and applies the migrations
+$ make db-setup
 
 # Executes the tests
 $ make test
 ```
 
+`make test` depends on `db-setup`, so in practice `make test` on a fresh
+checkout is enough. `DB_AUTO_SETUP=0 make test` skips that preparation.
+
+`make test` is the fast feedback loop: no coverage profiling and no `-v`.
+`make test-coverage` is the fuller run CI uses -- it writes `coverage.out` and
+enforces the per-package coverage gate in `hack/coverage.sh`.
+
+Useful companions while working on migrations:
+
+```sh
+$ make db-reset    # drop everything and rebuild from the migrations
+$ make db-psql     # psql shell on the development database
+$ make db-status   # is PostgreSQL running?
+$ make db-down     # stop the PostgreSQL that db-up started
+```
+
+### Regenerating schema.sql
+
+`schema.sql` is a committed dump of the `auth` schema. It is not used to build
+the database -- the migrations are the source of truth -- but it makes schema
+changes visible in review. After adding a migration, regenerate it:
+
+```sh
+$ make db-schema
+```
+
+Because the dump comes from whichever PostgreSQL you have installed, a
+different major version can produce a different file. If the diff looks larger
+than the migration you added, check your PostgreSQL version before committing.
+
 ### Customizing the PostgreSQL Port
 
-if you already run PostgreSQL and need to run your database on a different, custom port,
-you will need to make several configuration changes to the following files:
+The `db-*` targets take `PGPORT`:
 
-In these examples, we change the port from 5432 to 7432.
-
-> Note: This is not recommended, but if you do, please do not check in changes.
-
-```
-// file: docker-compose-dev.yml
-ports:
-  - 7432:5432 \ 👈 set the first value to your external facing port
+```sh
+$ PGPORT=7432 make db-setup
 ```
 
-The port you customize here can them be used in the subsequent configuration:
+The test suite is a separate matter. It reads `hack/test.env`, and `confload`
+loads that file with `godotenv.Overload`, so values in the file override the
+environment. To move the tests off 5432 you also have to edit the port in
+`hack/test.env`:
 
 ```
-// file: database.yaml
-test:
-dialect: "postgres"
-database: "postgres"
-host: {{ envOr "POSTGRES_HOST" "127.0.0.1" }}
-port: {{ envOr "POSTGRES_PORT" "7432" }} 👈 set to your port
+DATABASE_URL="postgres://supabase_auth_admin:root@localhost:7432/postgres"
 ```
 
-```
-// file: test.env
-DATABASE_URL="postgres://supabase_auth_admin:root@localhost:7432/postgres" 👈 set to your port
-```
-
-```
-// file: migrate.sh
-export GOTRUE_DB_DATABASE_URL="postgres://supabase_auth_admin:root@localhost:7432/$DB_ENV"
-```
+> Note: this is not recommended, and please do not check the change in.
 
 ## Helpful Docker Commands
 
