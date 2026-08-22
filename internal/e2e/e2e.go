@@ -9,10 +9,7 @@ import (
 	"github.com/supabase/auth/internal/storage/test"
 )
 
-var (
-	projectRoot = e2ecfg.GetProjectRoot()
-	configPath  = e2ecfg.GetConfigPath()
-)
+var configPath = e2ecfg.GetConfigPath()
 
 // Config calls confload.LoadGlobal using GetConfigPath().
 func Config() (*conf.GlobalConfiguration, error) {

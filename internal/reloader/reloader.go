@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
@@ -346,51 +345,3 @@ func (o *fsNotifyWatcher) Add(path string) error       { return o.wr.Add(path) }
 func (o *fsNotifyWatcher) Close() error                { return o.wr.Close() }
 func (o *fsNotifyWatcher) Errors() chan error          { return o.wr.Errors }
 func (o *fsNotifyWatcher) Events() chan fsnotify.Event { return o.wr.Events }
-
-type mockWatcher struct {
-	mu      sync.Mutex
-	err     error
-	eventCh chan fsnotify.Event
-	errorCh chan error
-	addCh   chan string
-}
-
-func newMockWatcher(err error) *mockWatcher {
-	wr := &mockWatcher{
-		err:     err,
-		eventCh: make(chan fsnotify.Event, 1024),
-		errorCh: make(chan error, 1024),
-		addCh:   make(chan string, 1024),
-	}
-	return wr
-}
-
-func (o *mockWatcher) getErr() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	err := o.err
-	return err
-}
-
-func (o *mockWatcher) setErr(err error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.err = err
-}
-
-func (o *mockWatcher) Add(path string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if err := o.err; err != nil {
-		return err
-	}
-
-	select {
-	case o.addCh <- path:
-	default:
-	}
-	return nil
-}
-func (o *mockWatcher) Close() error                { return o.getErr() }
-func (o *mockWatcher) Events() chan fsnotify.Event { return o.eventCh }
-func (o *mockWatcher) Errors() chan error          { return o.errorCh }

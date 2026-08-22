@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -887,3 +888,51 @@ func (o *mockFile) Sys() any           { return nil }
 func (o *mockFile) Type() fs.FileMode          { return o.mode }
 func (o *mockFile) Info() (fs.FileInfo, error) { return o.info, o.check() }
 func (o *mockFile) String() string             { return fs.FormatDirEntry(o) }
+
+type mockWatcher struct {
+	mu      sync.Mutex
+	err     error
+	eventCh chan fsnotify.Event
+	errorCh chan error
+	addCh   chan string
+}
+
+func newMockWatcher(err error) *mockWatcher {
+	wr := &mockWatcher{
+		err:     err,
+		eventCh: make(chan fsnotify.Event, 1024),
+		errorCh: make(chan error, 1024),
+		addCh:   make(chan string, 1024),
+	}
+	return wr
+}
+
+func (o *mockWatcher) getErr() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	err := o.err
+	return err
+}
+
+func (o *mockWatcher) setErr(err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.err = err
+}
+
+func (o *mockWatcher) Add(path string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.err; err != nil {
+		return err
+	}
+
+	select {
+	case o.addCh <- path:
+	default:
+	}
+	return nil
+}
+func (o *mockWatcher) Close() error                { return o.getErr() }
+func (o *mockWatcher) Events() chan fsnotify.Event { return o.eventCh }
+func (o *mockWatcher) Errors() chan error          { return o.errorCh }

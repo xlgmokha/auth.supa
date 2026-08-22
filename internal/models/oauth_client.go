@@ -3,7 +3,6 @@ package models
 import (
 	"database/sql"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -165,37 +164,6 @@ func (c *OAuthServerClient) IsGrantTypeAllowed(grantType string) bool {
 		}
 	}
 	return false
-}
-
-// validateRedirectURI validates a single redirect URI according to OAuth 2.1 spec
-func validateRedirectURI(uri string) error {
-	if uri == "" {
-		return fmt.Errorf("redirect URI cannot be empty")
-	}
-
-	parsedURL, err := url.Parse(uri)
-	if err != nil {
-		return fmt.Errorf("invalid URL format: %v", err)
-	}
-
-	if parsedURL.Scheme == "" {
-		return fmt.Errorf("redirect URI must be absolute (include scheme)")
-	}
-
-	if parsedURL.Fragment != "" {
-		return fmt.Errorf("redirect URI must not contain fragment")
-	}
-
-	// Allow localhost for development, otherwise require HTTPS
-	if parsedURL.Scheme == "http" {
-		if parsedURL.Hostname() != "localhost" && parsedURL.Hostname() != "127.0.0.1" {
-			return fmt.Errorf("redirect URI must use HTTPS except for localhost")
-		}
-	} else if parsedURL.Scheme != "https" {
-		return fmt.Errorf("redirect URI must use HTTPS or HTTP for localhost")
-	}
-
-	return nil
 }
 
 // Error types for OAuth client operations

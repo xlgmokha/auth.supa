@@ -288,14 +288,6 @@ func (a *API) PKCE(ctx context.Context, w http.ResponseWriter, r *http.Request) 
 	return sendJSON(w, http.StatusOK, token)
 }
 
-func (a *API) generateAccessToken(r *http.Request, tx *storage.Connection, user *models.User, sessionId *uuid.UUID, authenticationMethod models.AuthenticationMethod) (string, int64, error) {
-	return a.tokenService.GenerateAccessToken(r, tx, tokens.GenerateAccessTokenParams{
-		User:                 user,
-		SessionID:            sessionId,
-		AuthenticationMethod: authenticationMethod,
-	})
-}
-
 func (a *API) issueRefreshToken(r *http.Request, headers http.Header, conn *storage.Connection, user *models.User, authenticationMethod models.AuthenticationMethod, grantParams models.GrantParams) (*tokens.AccessTokenResponse, error) {
 	return a.tokenService.IssueRefreshToken(r, headers, conn, user, authenticationMethod, grantParams)
 }

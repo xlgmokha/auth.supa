@@ -52,22 +52,15 @@ make docker-build
 
 Auth -- as the name implies -- is a user registration and authentication API developed in [Go](https://go.dev).
 
-It connects to a [PostgreSQL](https://www.postgresql.org) database in order to store authentication data, [Soda CLI](https://gobuffalo.io/en/docs/db/toolbox) to manage database schema and migrations,
-and runs inside a [Docker](https://www.docker.com/get-started) container.
+It connects to a [PostgreSQL](https://www.postgresql.org) database in order to store authentication data, and runs inside a [Docker](https://www.docker.com/get-started) container. Database migrations live in [`migrations/`](migrations), are embedded into the binary at build time, and are applied by the `auth migrate` subcommand -- no external migration tool is needed.
 
 Therefore, to contribute to Auth you will need to install these tools.
 
 ### Install Tools
 
-- Install [Go](https://go.dev) 1.22
-
-```zsh
-# Via Homebrew on macOS
-brew install go@1.22
-
-# Set the environment variable in the ~/.zshrc file
-echo 'export PATH="/opt/homebrew/opt/go@1.22/bin:$PATH"' >> ~/.zshrc
-```
+- Install [Go](https://go.dev). The required version is pinned by the `go`
+  directive in [`go.mod`](go.mod); `make check-go-version` verifies that every
+  place the version is pinned agrees with it.
 
 - Install [Docker](https://www.docker.com/get-started)
 
@@ -77,17 +70,6 @@ brew install docker
 ```
 
 Or, if you prefer, download [Docker Desktop](https://www.docker.com/get-started).
-
-- Install [Soda CLI](https://gobuffalo.io/en/docs/db/toolbox)
-
-```zsh
-# Via Homebrew on macOS
-brew install gobuffalo/tap/pop
-```
-
-If you are on macOS Catalina you may [run into issues installing Soda with Brew](https://github.com/gobuffalo/homebrew-tap/issues/5). Do check your `GOPATH` and run
-
-`go build -o /bin/soda github.com/gobuffalo/pop/soda` to resolve.
 
 - Clone the Auth [repository](https://github.com/supabase/auth)
 
@@ -149,7 +131,7 @@ Then build the binary by running:
 make build
 ```
 
-4. To setup the database schema via Soda, run:
+4. To apply the database migrations, run:
 
 ```zsh
 make migrate_test
@@ -214,38 +196,29 @@ To test that your Auth is up and available, you can query the `health` endpoint 
 }
 ```
 
-To see the current settings, make a request to `http://localhost:9999/settings` and you should see a response similar to:
+To see the current settings, make a request to `http://localhost:9999/settings`. The
+response reports which sign-in methods your configuration has enabled:
 
 ```json
 {
   "external": {
-    "apple": false,
-    "azure": false,
-    "bitbucket": false,
-    "discord": false,
-    "github": false,
-    "gitlab": false,
-    "google": false,
-    "facebook": false,
-    "snapchat": false,
-    "spotify": false,
-    "slack": false,
-    "slack_oidc": false,
-    "twitch": true,
-    "twitter": false,
     "email": true,
     "phone": false,
-    "saml": false
-  },
-  "external_labels": {
-    "saml": "auth0"
+    "github": false,
+    "google": false
   },
   "disable_signup": false,
   "mailer_autoconfirm": false,
   "phone_autoconfirm": false,
-  "sms_provider": "twilio"
+  "sms_provider": "",
+  "saml_enabled": false,
+  "saml_private_key_next_configured": false,
+  "passkeys_enabled": false
 }
 ```
+
+The `external` object above is abridged -- it carries one key per supported
+provider. See [`openapi.yaml`](openapi.yaml) for the full schema.
 
 ## How to Use Admin API Endpoints
 
@@ -416,7 +389,7 @@ The following commands should help in setting up a database and running the test
 # Runs the database in a docker container
 $ docker-compose -f docker-compose-dev.yml up postgres
 
-# Applies the migrations to the database (requires soda cli)
+# Applies the migrations to the database
 $ make migrate_test
 
 # Executes the tests

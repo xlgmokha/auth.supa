@@ -84,36 +84,6 @@ func (ts *OAuthServerClientTestSuite) TestOAuthServerClientValidation() {
 	assert.Contains(ts.T(), err.Error(), "at least one redirect_uri is required")
 }
 
-func (ts *OAuthServerClientTestSuite) TestRedirectURIValidation() {
-	validURIs := []string{
-		"https://example.com/callback",
-		"https://app.example.com/auth/callback",
-		"http://localhost:3000/callback",
-		"http://127.0.0.1:8080/auth",
-	}
-
-	invalidURIs := []string{
-		"",                                  // empty
-		"not-a-url",                         // not a URL
-		"example.com/callback",              // missing scheme
-		"ftp://example.com/callback",        // invalid scheme
-		"https://example.com/callback#hash", // has fragment
-		"http://example.com/callback",       // HTTP for non-localhost
-	}
-
-	// Test valid URIs
-	for _, uri := range validURIs {
-		err := validateRedirectURI(uri)
-		assert.NoError(ts.T(), err, "URI should be valid: %s", uri)
-	}
-
-	// Test invalid URIs
-	for _, uri := range invalidURIs {
-		err := validateRedirectURI(uri)
-		assert.Error(ts.T(), err, "URI should be invalid: %s", uri)
-	}
-}
-
 func (ts *OAuthServerClientTestSuite) TestRedirectURIHelpers() {
 	client := &OAuthServerClient{}
 

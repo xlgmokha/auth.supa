@@ -1380,3 +1380,11 @@ func (o *testSystem) Setenv(key, value string) error {
 	o.env[key] = value
 	return nil
 }
+
+type optionFunc func(*Loader)
+
+func (f optionFunc) apply(a *Loader) { f(a) }
+
+func withSystem(sys system) Option {
+	return optionFunc(func(a *Loader) { a.sys = sys })
+}

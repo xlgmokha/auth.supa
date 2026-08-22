@@ -23,14 +23,6 @@ type Option interface {
 	apply(*Loader)
 }
 
-type optionFunc func(*Loader)
-
-func (f optionFunc) apply(a *Loader) { f(a) }
-
-func withSystem(sys system) Option {
-	return optionFunc(func(a *Loader) { a.sys = sys })
-}
-
 type Loader struct {
 	mu  sync.Mutex
 	sys system

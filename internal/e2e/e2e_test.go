@@ -9,6 +9,8 @@ import (
 	"github.com/supabase/auth/internal/e2e/e2ecfg"
 )
 
+var projectRoot = e2ecfg.GetProjectRoot()
+
 func TestUtils(t *testing.T) {
 
 	// check paths
