@@ -24,7 +24,6 @@ check() { # <label> <found>
 check "tools/go.mod"                   "$(gomod_version tools/go.mod)"
 check "internal/forks/godotenv/go.mod" "$(gomod_version internal/forks/godotenv/go.mod)"
 check "Dockerfile"                     "$(dockerfile_version Dockerfile)"
-check "Dockerfile.dev"                 "$(dockerfile_version Dockerfile.dev)"
 
 if [ "$FAIL" = true ]; then
   echo

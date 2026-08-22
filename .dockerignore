@@ -1,3 +1,14 @@
 /hack/
 /vendor/
 /www/
+
+# Local development state. The Dockerfile does "COPY . ." so anything not
+# excluded here lands in the build context and in the build stage's layers:
+# .postgres/ is a PostgreSQL data directory that grows without bound, and .env
+# holds whatever credentials the developer configured.
+/.postgres/
+.env*
+/auth
+/auth-*
+/coverage.out
+/schema.sql

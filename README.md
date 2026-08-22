@@ -42,15 +42,6 @@ PostgreSQL is already listening on port 5432, that one is used instead.
 
 Run `make help` for the full list of commands.
 
-### If you have Docker installed
-
-Create a `.env.docker` file to store your own custom env vars. See [`example.docker.env`](example.docker.env)
-
-1. `make build`
-2. `make dev`
-3. `docker ps` should show two Docker containers (`auth-auth-1` and `auth-postgres-1`)
-4. That's it! Visit the [health check endpoint](http://localhost:9999/health) to confirm that auth is running.
-
 ## Running in production
 
 Running an authentication server in production is not an easy feat. We

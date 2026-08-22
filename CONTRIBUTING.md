@@ -20,8 +20,8 @@ this checkout: the data lives in `.postgres/`, no system-wide PostgreSQL is
 touched, and `make db-down` stops it again. It finds the PostgreSQL binaries
 itself on Debian/Ubuntu and Homebrew; set `PG_BIN` if yours live elsewhere.
 
-If a PostgreSQL is already listening on port 5432 -- your own, or the container
-from `docker-compose-dev.yml` -- that one is used as-is and nothing is started.
+If a PostgreSQL is already listening on port 5432, that one is used as-is and
+nothing is started, however you happen to be running it.
 
 To run the server:
 
@@ -36,49 +36,11 @@ doing so when you are managing the database yourself.
 A full and up to date list of commands can be found in the project's `Makefile`
 or by running `make help`.
 
-### Using the development containers instead
-
-Auth also has a development container setup, which requires [Docker](https://www.docker.com/get-started). It includes a PostgreSQL container with migrations already applied and a container running GoTrue that will perform a hot reload when changes to the source code are detected.
-
-Before using the containers, you will need to make sure an `.env.docker` file exists by making a copy of `example.docker.env` and configuring it for your needs. The set of env vars in `example.docker.env` only contain the necessary env vars for auth to start in a docker environment. For the full list of env vars, please refer to `example.env` and copy over the necessary ones into your `.env.docker` file.
-
-### Starting the containers
-
-Start the containers as described above in an attached state with log output.
-
-```bash
-make dev
-```
-
-### Running tests in the containers
-
-Start the containers with a fresh database and run the project's tests.
-
-```bash
-make docker-test
-```
-
-### Removing the containers
-
-Remove both containers and their volumes. This removes any data associated with the containers.
-
-```bash
-make docker-clean
-```
-
-### Rebuild the containers
-
-Fully rebuild the containers without using any cached layers.
-
-```bash
-make docker-build
-```
-
 ## Setup and Tooling
 
 Auth -- as the name implies -- is a user registration and authentication API developed in [Go](https://go.dev).
 
-It connects to a [PostgreSQL](https://www.postgresql.org) database in order to store authentication data, and runs inside a [Docker](https://www.docker.com/get-started) container. Database migrations live in [`migrations/`](migrations), are embedded into the binary at build time, and are applied by the `auth migrate` subcommand -- no external migration tool is needed.
+It connects to a [PostgreSQL](https://www.postgresql.org) database in order to store authentication data. Database migrations live in [`migrations/`](migrations), are embedded into the binary at build time, and are applied by the `auth migrate` subcommand -- no external migration tool is needed.
 
 Therefore, to contribute to Auth you will need to install these tools.
 
@@ -88,14 +50,15 @@ Therefore, to contribute to Auth you will need to install these tools.
   directive in [`go.mod`](go.mod); `make check-go-version` verifies that every
   place the version is pinned agrees with it.
 
-- Install [Docker](https://www.docker.com/get-started)
+- Install [PostgreSQL](https://www.postgresql.org)
 
 ```zsh
 # Via Homebrew on macOS
-brew install docker
+brew install postgresql@15
 ```
 
-Or, if you prefer, download [Docker Desktop](https://www.docker.com/get-started).
+You do not need to run it yourself; `make db-up` starts one for this checkout.
+It only needs the binaries to be installed.
 
 - Clone the Auth [repository](https://github.com/supabase/auth)
 
@@ -111,7 +74,7 @@ To begin installation, be sure to start from the root directory.
 
 To complete installation, you will:
 
-- Install the PostgreSQL Docker image
+- Start PostgreSQL
 - Create the DB Schema and Migrations
 - Setup a local `.env` for environment variables
 - Compile Auth
@@ -119,24 +82,16 @@ To complete installation, you will:
 
 #### Installation Steps
 
-1. Start PostgreSQL. Either run it locally, which needs no Docker:
+1. Start PostgreSQL:
 
 ```zsh
 make db-up
 ```
 
-Or run it in a container:
-
-```zsh
-docker-compose -f docker-compose-dev.yml up postgres
-```
-
-You should then see in Docker that `auth-postgres-1` is running on `port: 5432`.
-
-> **Important** If you already have a local PostgreSQL on port `5432` -- for example
-> from [homebrew on macOS](https://formulae.brew.sh/formula/postgresql) -- the container will
-> not be able to bind the port. Either stop it with `brew services stop postgresql`, or skip
-> the container entirely and use `make db-up`, which reuses whatever is already listening.
+This runs a cluster belonging to this checkout, with its data in `.postgres/`.
+If you already have a PostgreSQL listening on `5432` -- from
+[homebrew on macOS](https://formulae.brew.sh/formula/postgresql), say -- that one
+is used instead and nothing new is started.
 
 3. Next compile the Auth binary:
 
@@ -184,7 +139,7 @@ That lists each migration that was applied. Note: there may be more migrations t
 
 4. Create a `.env` file in the root of the project and copy the following config in [example.env](example.env). Set the values to GOTRUE_SMS_TEST_OTP_VALID_UNTIL in the `.env` file.
 
-5. In order to have Auth connect to your PostgreSQL database running in Docker, it is important to set a connection string like:
+5. In order to have Auth connect to your PostgreSQL database, it is important to set a connection string like:
 
 ```
 DATABASE_URL="postgres://supabase_auth_admin:root@localhost:5432/postgres"
@@ -465,17 +420,23 @@ DATABASE_URL="postgres://supabase_auth_admin:root@localhost:7432/postgres"
 
 > Note: this is not recommended, and please do not check the change in.
 
-## Helpful Docker Commands
+## Helpful Database Commands
 
 ```zsh
-# Command line into bash on the PostgreSQL container
-docker exec -it auth-postgres-1 bash
+# psql shell on the development database
+make db-psql
 
-# Removes Container
-docker container rm -f auth-postgres-1
+# Stop the PostgreSQL that db-up started
+make db-down
 
-# Removes volume
-docker volume rm postgres_data
+# Drop the auth schema and its roles, then rebuild from the migrations
+make db-reset
+```
+
+To throw the cluster away entirely, stop it and delete its data directory:
+
+```zsh
+make db-down && rm -rf .postgres
 ```
 
 ## Updating Package Dependencies

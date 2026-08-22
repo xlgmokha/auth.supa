@@ -4,9 +4,8 @@
 #
 # The cluster is self contained: its data lives in .postgres/ inside the repo,
 # starting it touches no system wide PostgreSQL install, and "stop" leaves
-# nothing behind. If a server is already listening on $PGPORT -- your own
-# PostgreSQL, or the one from docker-compose-dev.yml -- that server is used as
-# is and these commands do nothing to it.
+# nothing behind. If a server is already listening on $PGPORT, however you are
+# running it, that server is used as is and these commands do nothing to it.
 #
 # Usage: hack/postgres.sh {start|stop|status|bindir}
 

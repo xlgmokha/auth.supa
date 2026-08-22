@@ -9,14 +9,6 @@ else
 	VERSION=$(shell git describe --tags)
 endif
 
-ifneq ($(shell docker compose version 2>/dev/null),)
-	DOCKER_COMPOSE = docker compose
-else
-	DOCKER_COMPOSE = docker-compose
-endif
-
-DEV_DOCKER_COMPOSE = docker-compose-dev.yml
-
 BUILD_VERSION_PKG = github.com/supabase/auth/internal/utilities
 BUILD_LD_FLAGS = -X $(BUILD_VERSION_PKG).Version=$(VERSION)
 BUILD_CMD = go build \
@@ -186,7 +178,7 @@ server: auth $(DB_SETUP_DEP) ## Run the auth server against .env.
 vet: # Vet the code
 	go vet $(CHECK_FILES)
 
-check-go-version: ## Verify the pinned Go version matches across go.mod, Dockerfiles, and submodules.
+check-go-version: ## Verify the pinned Go version matches across go.mod, the Dockerfile, and submodules.
 	./hack/check-go-version.sh
 
 .NOTPARALLEL: $(TOOL_TARGETS)
@@ -225,28 +217,6 @@ generate: | check-oapi-codegen
 check-oapi-codegen:
 	@command -v oapi-codegen >/dev/null 2>&1 \
 		|| go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
-
-dev: ## Run the development containers
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) up
-
-down: ## Shutdown the development containers
-	# Start postgres first and apply migrations
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) down
-
-docker-test: ## Run the tests using the development containers
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) up -d postgres
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) run auth sh -c "make migrate_test"
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) run auth sh -c "make test"
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) down -v
-
-docker-build: ## Force a full rebuild of the development containers
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) build --no-cache
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) up -d postgres
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) run auth sh -c "make migrate_dev"
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) down
-
-docker-clean: ## Remove the development containers and volumes
-	${DOCKER_COMPOSE} -f $(DEV_DOCKER_COMPOSE) rm -fsv
 
 format:
 	gofmt -s -w .
