@@ -15,6 +15,11 @@ create table if not exists {{ index .Options "Namespace" }}.scim_groups (
 create unique index if not exists scim_groups_display_name_key
     on {{ index .Options "Namespace" }}.scim_groups (sso_provider_id, lower(display_name));
 
+-- externalId is the IdP's key for the group; unique within a provider when set.
+create unique index if not exists scim_groups_external_id_key
+    on {{ index .Options "Namespace" }}.scim_groups (sso_provider_id, external_id)
+    where external_id is not null;
+
 -- Group membership. The composite key prevents duplicate (group, user) rows.
 create table if not exists {{ index .Options "Namespace" }}.scim_group_members (
     scim_group_id uuid not null,
