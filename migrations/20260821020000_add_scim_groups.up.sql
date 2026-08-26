@@ -20,3 +20,8 @@ create table if not exists {{ index .Options "Namespace" }}.scim_group_members (
     scim_user_id uuid not null references {{ index .Options "Namespace" }}.scim_users (id) on delete cascade,
     constraint scim_group_members_pkey primary key (scim_group_id, scim_user_id)
 );
+
+alter table {{ index .Options "Namespace" }}.scim_groups enable row level security;
+alter table {{ index .Options "Namespace" }}.scim_group_members enable row level security;
+grant select on {{ index .Options "Namespace" }}.scim_groups to postgres with grant option;
+grant select on {{ index .Options "Namespace" }}.scim_group_members to postgres with grant option;
