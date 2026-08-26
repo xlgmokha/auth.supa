@@ -17,7 +17,7 @@ create table if not exists {{ index .Options "Namespace" }}.scim_users (
 
 -- userName is unique within a provider, case-folded, excluding soft-deleted rows.
 create unique index if not exists scim_users_user_name_key
-    on {{ index .Options "Namespace" }}.scim_users (sso_provider_id, lower(user_name))
+    on {{ index .Options "Namespace" }}.scim_users (sso_provider_id, lower(user_name) collate "C")
     where deleted_at is null;
 
 -- externalId is unique within a provider when set; nulls are unconstrained.

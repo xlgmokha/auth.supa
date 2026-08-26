@@ -13,7 +13,7 @@ create table if not exists {{ index .Options "Namespace" }}.scim_groups (
 
 -- displayName is unique within a provider, case-folded.
 create unique index if not exists scim_groups_display_name_key
-    on {{ index .Options "Namespace" }}.scim_groups (sso_provider_id, lower(display_name));
+    on {{ index .Options "Namespace" }}.scim_groups (sso_provider_id, lower(display_name) collate "C");
 
 -- externalId is the IdP's key for the group; unique within a provider when set.
 create unique index if not exists scim_groups_external_id_key
