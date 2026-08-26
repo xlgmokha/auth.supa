@@ -11,7 +11,8 @@ create table if not exists {{ index .Options "Namespace" }}.scim_users (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     deleted_at timestamptz,
-    constraint scim_users_pkey primary key (id)
+    constraint scim_users_pkey primary key (id),
+    constraint scim_users_id_provider_key unique (id, sso_provider_id)
 );
 
 -- userName is unique within a provider, case-folded, excluding soft-deleted rows.

@@ -7,7 +7,8 @@ create table if not exists {{ index .Options "Namespace" }}.scim_groups (
     external_id text generated always as (resource->>'externalId') stored,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    constraint scim_groups_pkey primary key (id)
+    constraint scim_groups_pkey primary key (id),
+    constraint scim_groups_id_provider_key unique (id, sso_provider_id)
 );
 
 -- displayName is unique within a provider, case-folded.
@@ -16,9 +17,16 @@ create unique index if not exists scim_groups_display_name_key
 
 -- Group membership. The composite key prevents duplicate (group, user) rows.
 create table if not exists {{ index .Options "Namespace" }}.scim_group_members (
-    scim_group_id uuid not null references {{ index .Options "Namespace" }}.scim_groups (id) on delete cascade,
-    scim_user_id uuid not null references {{ index .Options "Namespace" }}.scim_users (id) on delete cascade,
-    constraint scim_group_members_pkey primary key (scim_group_id, scim_user_id)
+    scim_group_id uuid not null,
+    scim_user_id uuid not null,
+    sso_provider_id uuid not null,
+    constraint scim_group_members_pkey primary key (scim_group_id, scim_user_id),
+    constraint scim_group_members_group_fkey
+        foreign key (scim_group_id, sso_provider_id)
+        references {{ index .Options "Namespace" }}.scim_groups (id, sso_provider_id) on delete cascade,
+    constraint scim_group_members_user_fkey
+        foreign key (scim_user_id, sso_provider_id)
+        references {{ index .Options "Namespace" }}.scim_users (id, sso_provider_id) on delete cascade
 );
 
 alter table {{ index .Options "Namespace" }}.scim_groups enable row level security;
