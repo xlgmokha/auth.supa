@@ -48,5 +48,8 @@ create index if not exists scim_users_updated_at_idx
     on {{ index .Options "Namespace" }}.scim_users (sso_provider_id, updated_at, id)
     where deleted_at is null;
 
+create index if not exists scim_users_sso_provider_id_idx
+    on {{ index .Options "Namespace" }}.scim_users (sso_provider_id);
+
 alter table {{ index .Options "Namespace" }}.scim_users enable row level security;
 grant select on {{ index .Options "Namespace" }}.scim_users to postgres with grant option;
