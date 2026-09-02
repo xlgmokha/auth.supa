@@ -1,10 +1,12 @@
 # Setup: see CONTRIBUTING.md.
 pre-commit:
-  parallel: true
   commands:
     gofmt:
       glob: "*.go"
-      run: make check-format
+      run: make check-format FILES="{staged_files}"
+
+pre-push:
+  commands:
     lint:
       glob: "*.go"
-      run: make -j lint
+      run: make lint
