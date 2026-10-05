@@ -187,6 +187,10 @@ func tollboothByField(o *Limiter, field string) *limiter.Limiter {
 		return o.Verify
 	case fieldWeb3:
 		return o.Web3
+	case fieldSCIMDirectory:
+		return o.SCIMDirectory
+	case fieldSCIMIP:
+		return o.SCIMIP
 	default:
 		panic("unknown field")
 	}
@@ -226,6 +230,10 @@ func tollboothCfgByField(gc *conf.GlobalConfiguration, field string) *float64 {
 		return &gc.RateLimitVerify
 	case fieldWeb3:
 		return &gc.RateLimitWeb3
+	case fieldSCIMDirectory:
+		return &gc.SSO.SCIM.RateLimitDirectory
+	case fieldSCIMIP:
+		return &gc.SSO.SCIM.RateLimitIP
 	default:
 		panic("unknown field")
 	}

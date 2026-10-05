@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/oauthserver"
+	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/api/shared"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/observability"
@@ -26,6 +27,8 @@ import (
 	"github.com/didip/tollbooth/v5"
 	"github.com/didip/tollbooth/v5/limiter"
 	jwt "github.com/golang-jwt/jwt/v5"
+	scimprotocol "github.com/supabase-community/scim-go/pkg/protocol"
+	"github.com/supabase-community/scim-go/pkg/scimerrors"
 )
 
 type captchaRequest struct {
@@ -425,12 +428,73 @@ func (a *API) requirePasskeyEnabled(w http.ResponseWriter, req *http.Request) (c
 	return ctx, nil
 }
 
-func (a *API) requireScimServerEnabled(w http.ResponseWriter, req *http.Request) (context.Context, error) {
+// scimEnabled reports whether SCIM is on for the project. It needs SAML, the
+// only kind of SSO provider SCIM provisions into.
+func (a *API) scimEnabled() bool {
+	return a.config.SSO.SCIM.Enabled && a.config.SAML.Enabled
+}
+
+func (a *API) requireSCIMEnabled(w http.ResponseWriter, req *http.Request) (context.Context, error) {
 	ctx := req.Context()
-	if !a.config.SSO.SCIM.Enabled {
-		return nil, apierrors.NewNotFoundError(apierrors.ErrorCodeFeatureDisabled, "SCIM server is disabled")
+	if !a.scimEnabled() {
+		return nil, apierrors.NewNotFoundError(apierrors.ErrorCodeFeatureDisabled, "SCIM is disabled")
 	}
 	return ctx, nil
+}
+
+// scimAuthenticate resolves the SCIM bearer token, if any, and rate limits
+// the request: by the token's directory when the token is usable, so one
+// directory exhausting its budget never affects another, and by IP address
+// otherwise. Admin credentials and client-supplied provider headers play no
+// part; the token alone decides the directory.
+func (a *API) scimAuthenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var credential *models.SCIMCredential
+		if token := scimBearerToken(r); token != "" {
+			found, err := models.FindSCIMCredential(a.db.WithContext(r.Context()), token)
+			switch {
+			case err == nil:
+				credential = found
+			case !models.IsNotFoundError(err):
+				observability.GetLogEntry(r).Entry.WithError(err).Error("could not resolve SCIM token")
+				_ = scimprotocol.SendError(w, scimerrors.ErrInternal("Internal server error"))
+				return
+			}
+		}
+
+		limiter, key := a.limiterOpts.SCIMIP, scimClientIP(r, a.config.RateLimitHeader)
+		if credential != nil && credential.IsUsable(a.Now()) {
+			limiter, key = a.limiterOpts.SCIMDirectory, credential.DirectoryID.String()
+		}
+		if err := tollbooth.LimitByKeys(limiter, []string{key}); err != nil {
+			_ = scimprotocol.SendError(w, scimerrors.NewError(http.StatusTooManyRequests, "", "Request rate limit reached"))
+			return
+		}
+
+		next.ServeHTTP(w, r.WithContext(scim.WithCredential(r, credential)))
+	})
+}
+
+func scimBearerToken(r *http.Request) string {
+	scheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
+}
+
+// scimClientIP is the address unresolved SCIM requests are rate limited by:
+// the trusted forwarded address when there is one, else the remote address.
+func scimClientIP(r *http.Request, rateLimitHeader string) string {
+	if addr, ok := sbff.GetIPAddress(r); ok {
+		return addr
+	}
+	if rateLimitHeader != "" {
+		if value, _, _ := strings.Cut(r.Header.Get(rateLimitHeader), ","); strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return utilities.GetIPAddress(r)
 }
 
 func (a *API) databaseCleanup(cleanup models.Cleaner) func(http.Handler) http.Handler {

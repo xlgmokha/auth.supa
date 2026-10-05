@@ -78,6 +78,16 @@ const (
 	//   -> RateLimitWeb3
 	envRateLimitWeb3 = "GOTRUE_RATE_LIMIT_WEB3"
 	fieldWeb3        = "Web3"
+
+	// GOTRUE_SSO_SCIM_RATE_LIMIT_DIRECTORY
+	//   -> SSO.SCIM.RateLimitDirectory
+	envSCIMRateLimitDirectory = "GOTRUE_SSO_SCIM_RATE_LIMIT_DIRECTORY"
+	fieldSCIMDirectory        = "SCIMDirectory"
+
+	// GOTRUE_SSO_SCIM_RATE_LIMIT_IP
+	//   -> SSO.SCIM.RateLimitIP
+	envSCIMRateLimitIP = "GOTRUE_SSO_SCIM_RATE_LIMIT_IP"
+	fieldSCIMIP        = "SCIMIP"
 )
 
 var ratelimitFieldsToEnv = map[string]string{
@@ -102,6 +112,8 @@ var tollboothFieldsToEnv = map[string]string{
 	fieldToken:                 envRateLimitTokenRefresh,
 	fieldVerify:                envRateLimitVerify,
 	fieldWeb3:                  envRateLimitWeb3,
+	fieldSCIMDirectory:         envSCIMRateLimitDirectory,
+	fieldSCIMIP:                envSCIMRateLimitIP,
 }
 
 var fieldsToEnv = func() map[string]string {
@@ -179,6 +191,14 @@ type Limiter struct {
 	// GOTRUE_RATE_LIMIT_WEB3
 	//   -> RateLimitWeb3
 	Web3 *limiter.Limiter
+
+	// GOTRUE_SSO_SCIM_RATE_LIMIT_DIRECTORY
+	//   -> SSO.SCIM.RateLimitDirectory
+	SCIMDirectory *limiter.Limiter
+
+	// GOTRUE_SSO_SCIM_RATE_LIMIT_IP
+	//   -> SSO.SCIM.RateLimitIP
+	SCIMIP *limiter.Limiter
 }
 
 func New(gc *conf.GlobalConfiguration) *Limiter {
@@ -238,6 +258,8 @@ func New(gc *conf.GlobalConfiguration) *Limiter {
 	o.Signups = newLimiterPer5mOver1h(gc.RateLimitOtp)
 	o.OAuthClientRegister = newLimiterPer5mOver1h(gc.RateLimitOAuthDynamicClientRegister)
 	o.PasskeyAuthentication = newLimiterPer5mOver1h(gc.RateLimitPasskey)
+	o.SCIMDirectory = newLimiterPerSecond(gc.SSO.SCIM.RateLimitDirectory)
+	o.SCIMIP = newLimiterPerSecond(gc.SSO.SCIM.RateLimitIP)
 	return o
 }
 
@@ -264,6 +286,8 @@ func (o *Limiter) Copy() *Limiter {
 		User:                  o.User,
 		Verify:                o.Verify,
 		Web3:                  o.Web3,
+		SCIMDirectory:         o.SCIMDirectory,
+		SCIMIP:                o.SCIMIP,
 	}
 }
 
@@ -346,6 +370,16 @@ func (o *Limiter) Update(
 		v.Web3 = newLimiterPer5mOver1h(b)
 		logEnvUpdates(le, envRateLimitWeb3, a, b)
 	}
+
+	if a, b := prevCfg.SSO.SCIM.RateLimitDirectory, nextCfg.SSO.SCIM.RateLimitDirectory; a != b {
+		v.SCIMDirectory = newLimiterPerSecond(b)
+		logEnvUpdates(le, envSCIMRateLimitDirectory, a, b)
+	}
+
+	if a, b := prevCfg.SSO.SCIM.RateLimitIP, nextCfg.SSO.SCIM.RateLimitIP; a != b {
+		v.SCIMIP = newLimiterPerSecond(b)
+		logEnvUpdates(le, envSCIMRateLimitIP, a, b)
+	}
 	return v
 }
 
@@ -361,6 +395,12 @@ func newLimiterPer5mOver1h(rate float64) *limiter.Limiter {
 		DefaultExpirationTTL: time.Hour,
 	}).SetBurst(30)
 	return lim
+}
+
+// newLimiterPerSecond allows rate requests per second with a burst of one
+// second's worth.
+func newLimiterPerSecond(rate float64) *limiter.Limiter {
+	return newTollbooth(rate, max(int(rate), 1), time.Hour)
 }
 
 func logEnvUpdates(
