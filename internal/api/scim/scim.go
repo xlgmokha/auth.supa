@@ -643,7 +643,7 @@ func (s *UserRepository) Create(ctx context.Context, user *core.User) (*core.Use
 		if err != nil {
 			return nil, nil, "", err
 		}
-		created, err := s.events.UserProvisioned(tx, row, user)
+		created, err := s.events.UserProvisioned(tx, row, newProfile(user))
 		return row, created, models.SCIMUserCreatedAction, err
 	})
 }
@@ -681,14 +681,14 @@ func (s *UserRepository) Update(ctx context.Context, user *core.User) (*core.Use
 			if err != nil {
 				return nil, nil, "", err
 			}
-			created, err := s.events.UserProvisioned(tx, row, user)
+			created, err := s.events.UserProvisioned(tx, row, newProfile(user))
 			return row, created, models.SCIMUserUpdatedAction, err
 		}
 		row, changed, err := models.ReplaceSCIMUserIfChanged(tx, target, resource)
 		if err != nil || !changed {
 			return row, nil, "", err
 		}
-		return row, nil, models.SCIMUserUpdatedAction, s.events.UserUpdated(tx, r, UserUpdate{Old: existing, Row: row, User: user})
+		return row, nil, models.SCIMUserUpdatedAction, s.events.UserUpdated(tx, r, UserUpdate{Old: existing, Row: row, Profile: newProfile(user)})
 	})
 }
 
@@ -801,10 +801,10 @@ func (s *UserRepository) render(tx *storage.Connection, providerID uuid.UUID, ro
 }
 
 func (s *UserRepository) beforeProvision(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error {
-	if UserEmail(user) == "" {
+	if userEmail(user) == "" {
 		return scimerrors.ErrInvalidValue(`"emails" or an email address "userName" is required`)
 	}
-	return s.events.BeforeUserProvisioned(r, db, providerID, user)
+	return s.events.BeforeUserProvisioned(r, db, providerID, newProfile(user))
 }
 
 func scimUserResource(user *core.User) ([]byte, error) {
@@ -818,7 +818,7 @@ func scimUserResource(user *core.User) ([]byte, error) {
 	return resource, nil
 }
 
-func UserEmail(user *core.User) string {
+func userEmail(user *core.User) string {
 	if email := scimPrimaryEmail(user.Emails); email != "" {
 		return email
 	}
@@ -842,14 +842,6 @@ func scimPrimaryEmail(emails []core.Email) string {
 		return emails[0].Value
 	}
 	return ""
-}
-
-func IdentityData(user *core.User) map[string]any {
-	return map[string]any{
-		ClaimSub:               user.UserName,
-		ClaimEmail:             UserEmail(user),
-		scimClaimEmailVerified: true,
-	}
 }
 
 func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditAction, row *models.SCIMUser) (auditEvent, error) {

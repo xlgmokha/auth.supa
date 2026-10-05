@@ -27,6 +27,14 @@ func Error(err error) error {
 	return err
 }
 
+func ErrUniqueness(detail string) error {
+	return scimerrors.ErrUniqueness(detail)
+}
+
+func ErrStatus(status int, detail string) error {
+	return scimerrors.NewError(status, "", detail)
+}
+
 func errSCIMNotFound() error {
 	return scimerrors.ErrNotFound("resource not found")
 }
