@@ -419,7 +419,7 @@ func (a *API) createAccountFromExternalIdentity(tx *storage.Connection, r *http.
 			return 0, nil, terr
 		}
 		if deprovisioned {
-			return 0, nil, apierrors.NewForbiddenError(apierrors.ErrorCodeUserBanned, "User is banned")
+			return 0, nil, apierrors.NewForbiddenError(apierrors.ErrorCodeUserBanned, "User is deprovisioned")
 		}
 	}
 

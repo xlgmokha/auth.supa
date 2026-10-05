@@ -893,7 +893,7 @@ func (s *Service) IssueRefreshToken(r *http.Request, responseHeaders http.Header
 				return apierrors.NewInternalServerError("Database error checking SCIM user").WithInternalError(terr)
 			}
 			if deprovisioned {
-				return apierrors.NewForbiddenError(apierrors.ErrorCodeUserBanned, "User is banned")
+				return apierrors.NewForbiddenError(apierrors.ErrorCodeUserBanned, "User is deprovisioned")
 			}
 		}
 

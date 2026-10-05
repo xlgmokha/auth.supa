@@ -352,7 +352,7 @@ func (ts *SCIMTestSuite) TestSAMLLoginBlockedWhenCreatedInactive() {
 	ts.linkedUser(ts.create(ts.TokenA, oktaUserWith("active", false)))
 
 	_, err := ts.samlLogin(ts.A, "Alice@Example.com", "alice@example.com")
-	require.Error(ts.T(), err)
+	ts.requireDeprovisioned(err)
 }
 
 func (ts *SCIMTestSuite) TestSAMLLoginAllowedWhenActiveOmitted() {
@@ -409,11 +409,12 @@ func (ts *SCIMTestSuite) issueSession(conn *storage.Connection, user *models.Use
 	return err
 }
 
-func (ts *SCIMTestSuite) requireBanned(err error) {
+func (ts *SCIMTestSuite) requireDeprovisioned(err error) {
 	var httpErr *apierrors.HTTPError
 	require.ErrorAs(ts.T(), err, &httpErr)
 	require.Equal(ts.T(), http.StatusForbidden, httpErr.HTTPStatus)
 	require.Equal(ts.T(), apierrors.ErrorCodeUserBanned, httpErr.ErrorCode)
+	require.Equal(ts.T(), "User is deprovisioned", httpErr.Message)
 }
 
 func (ts *SCIMTestSuite) TestLoginAndSessionRefusedWhileDeprovisioned() {
@@ -424,11 +425,11 @@ func (ts *SCIMTestSuite) TestLoginAndSessionRefusedWhileDeprovisioned() {
 
 	ts.setActive(id, false)
 	_, err := ts.samlLogin(ts.A, "Alice@Example.com", "alice@example.com")
-	require.Error(ts.T(), err)
+	ts.requireDeprovisioned(err)
 	_, err = ts.samlLogin(ts.A, "saml-name-id", "alice@example.com")
-	require.Error(ts.T(), err)
+	ts.requireDeprovisioned(err)
 	require.Len(ts.T(), ts.identities(user), 1)
-	ts.requireBanned(ts.issueSession(ts.API.db, user))
+	ts.requireDeprovisioned(ts.issueSession(ts.API.db, user))
 	require.Zero(ts.T(), ts.sessions(user))
 
 	ts.setActive(id, true)
@@ -437,13 +438,13 @@ func (ts *SCIMTestSuite) TestLoginAndSessionRefusedWhileDeprovisioned() {
 
 	ts.expect(http.StatusNoContent, http.MethodDelete, "/Users/"+id, "")
 	_, err = ts.samlLogin(ts.A, "Alice@Example.com", "alice@example.com")
-	require.Error(ts.T(), err)
-	ts.requireBanned(ts.issueSession(ts.API.db, user))
+	ts.requireDeprovisioned(err)
+	ts.requireDeprovisioned(ts.issueSession(ts.API.db, user))
 
 	ts.expect(http.StatusConflict, http.MethodPost, "/Users", oktaUser)
 	_, err = ts.samlLogin(ts.A, "Alice@Example.com", "alice@example.com")
-	require.Error(ts.T(), err)
-	ts.requireBanned(ts.issueSession(ts.API.db, user))
+	ts.requireDeprovisioned(err)
+	ts.requireDeprovisioned(ts.issueSession(ts.API.db, user))
 }
 
 func (ts *SCIMTestSuite) TestSessionRefusedForLinkedOAuthIdentityWhileDeprovisioned() {
@@ -460,7 +461,7 @@ func (ts *SCIMTestSuite) TestSessionRefusedForLinkedOAuthIdentityWhileDeprovisio
 		require.Equal(ts.T(), user.ID, found.ID)
 		return ts.issueSession(tx, found)
 	})
-	ts.requireBanned(err)
+	ts.requireDeprovisioned(err)
 	require.Zero(ts.T(), ts.sessions(user))
 }
 
