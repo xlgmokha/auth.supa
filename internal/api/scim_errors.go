@@ -18,6 +18,8 @@ func scimError(err error) error {
 		return scimerrors.ErrUniqueness(`"externalId" must be unique`)
 	case errors.Is(err, models.ErrSCIMGroupMemberNotFound):
 		return errSCIMMemberNotFound()
+	case errors.Is(err, models.ErrSCIMGroupCycle):
+		return scimerrors.ErrInvalidValue(`"members" must not create a group cycle`)
 	case errors.Is(err, models.ErrSCIMUserConflict):
 		return scimerrors.ErrUniqueness(`"userName" and "externalId" must be unique`)
 	}
@@ -33,7 +35,7 @@ func errSCIMStale() error {
 }
 
 func errSCIMMemberNotFound() error {
-	return scimerrors.ErrInvalidValue(`"members.value" must reference a User in this provider`)
+	return scimerrors.ErrInvalidValue(`"members.value" must reference a User or Group in this provider`)
 }
 
 func errSCIMTooManyRequests() error {

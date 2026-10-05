@@ -117,7 +117,7 @@ func (a *API) deleteSCIMUsers(tx *storage.Connection, r *http.Request, actor *mo
 		return err
 	}
 	for i := range rows {
-		if err := models.RemoveSCIMUserFromGroups(tx, rows[i].ID); err != nil {
+		if err := models.RemoveSCIMMemberFromGroups(tx, rows[i].ID); err != nil {
 			return err
 		}
 		event := scimAuditEvent{actor: actor, action: models.SCIMUserDeletedAction, providerID: rows[i].SSOProviderID, traits: scimUserTraits(&rows[i], &userID)}
@@ -406,7 +406,10 @@ func (s *scimGroupRepository) Read(ctx context.Context, id string) (*core.Group,
 		return nil, err
 	}
 	if snapshot := scimGroupSnapshotKey.Value(ctx); snapshot != nil && projection.Returns("members") {
-		snapshot.members, snapshot.version = members[row.ID], group.Meta.Version
+		snapshot.members, snapshot.version = make([]uuid.UUID, len(members[row.ID])), group.Meta.Version
+		for i, member := range members[row.ID] {
+			snapshot.members[i] = member.SCIMUserID
+		}
 	}
 	return group, nil
 }
@@ -462,6 +465,9 @@ func (s *scimGroupRepository) Delete(ctx context.Context, group *core.Group) err
 		if err := json.Unmarshal(row.Resource, &resource); err != nil {
 			return err
 		}
+		if err := models.RemoveSCIMMemberFromGroups(tx, row.ID); err != nil {
+			return err
+		}
 		return auditSCIM(s.config, tx, r, scimGroupEvent(r, models.SCIMGroupDeletedAction, row, resource.DisplayName))
 	}))
 }
@@ -513,7 +519,11 @@ func (s *scimGroupRepository) save(ctx context.Context, group *core.Group, write
 	if err != nil {
 		return nil, scimError(err)
 	}
-	return s.compose(*row, change.Members)
+	stored, err := row.Members()
+	if err != nil {
+		return nil, err
+	}
+	return s.compose(*row, stored)
 }
 
 func (s *scimGroupRepository) mergeable(ctx context.Context, version string) bool {
@@ -524,8 +534,8 @@ func (s *scimGroupRepository) mergeable(ctx context.Context, version string) boo
 	return blindPatch && sameVersion
 }
 
-func (s *scimGroupRepository) members(tx *storage.Connection, providerID uuid.UUID, rows []models.SCIMGroup, projection protocol.Projection) (map[uuid.UUID][]uuid.UUID, error) {
-	members := map[uuid.UUID][]uuid.UUID{}
+func (s *scimGroupRepository) members(tx *storage.Connection, providerID uuid.UUID, rows []models.SCIMGroup, projection protocol.Projection) (map[uuid.UUID][]models.SCIMGroupMembership, error) {
+	members := map[uuid.UUID][]models.SCIMGroupMembership{}
 	if !projection.Returns("members") {
 		return members, nil
 	}
@@ -538,12 +548,12 @@ func (s *scimGroupRepository) members(tx *storage.Connection, providerID uuid.UU
 		return nil, err
 	}
 	for _, m := range memberships {
-		members[m.GroupID] = append(members[m.GroupID], m.SCIMUserID)
+		members[m.GroupID] = append(members[m.GroupID], m)
 	}
 	return members, nil
 }
 
-func (s *scimGroupRepository) compose(row models.SCIMGroup, scimUserIDs []uuid.UUID) (*core.Group, error) {
+func (s *scimGroupRepository) compose(row models.SCIMGroup, members []models.SCIMGroupMembership) (*core.Group, error) {
 	base := scimBaseURL(s.config)
 	group := &core.Group{}
 	if err := json.Unmarshal(row.Resource, group); err != nil {
@@ -558,10 +568,10 @@ func (s *scimGroupRepository) compose(row models.SCIMGroup, scimUserIDs []uuid.U
 		Version:      scimVersion(row.UpdatedAt),
 	}
 	group.Schemas = []core.SchemaURI{core.SchemaGroup}
-	group.Members = make([]core.Member, len(scimUserIDs))
-	for i, scimUserID := range scimUserIDs {
-		id := scimUserID.String()
-		group.Members[i] = core.Member{Value: id, Ref: base + "/Users/" + id, Type: scimResourceTypeUser}
+	group.Members = make([]core.Member, len(members))
+	for i, member := range members {
+		id := member.SCIMUserID.String()
+		group.Members[i] = core.Member{Value: id, Ref: base + "/" + member.Type + "s/" + id, Type: core.ResourceTypeName(member.Type)}
 	}
 	return group, nil
 }
@@ -703,7 +713,7 @@ func (s *scimUserRepository) Delete(ctx context.Context, user *core.User) error 
 		if err := s.events.UserDeleted(tx, row); err != nil {
 			return err
 		}
-		if err := models.RemoveSCIMUserFromGroups(tx, row.ID); err != nil {
+		if err := models.RemoveSCIMMemberFromGroups(tx, row.ID); err != nil {
 			return err
 		}
 		event, err := scimUserEvent(tx, r, models.SCIMUserDeletedAction, row)
@@ -764,7 +774,7 @@ func (s *scimUserRepository) render(tx *storage.Connection, providerID uuid.UUID
 				Value:   id,
 				Ref:     base + "/Groups/" + id,
 				Display: m.Display,
-				Type:    "direct",
+				Type:    m.Type,
 			})
 		}
 	}

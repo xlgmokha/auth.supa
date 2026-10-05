@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gofrs/uuid"
@@ -28,6 +29,7 @@ type SCIMGroupMembership struct {
 	GroupID    uuid.UUID `db:"group_id"`
 	SCIMUserID uuid.UUID `db:"scim_user_id"`
 	Display    string    `db:"display"`
+	Type       string    `db:"type"`
 }
 
 type SCIMGroupMemberChange struct {
@@ -83,7 +85,7 @@ func FindSCIMMembershipsByGroup(tx *storage.Connection, providerID uuid.UUID, gr
 		return members, nil
 	}
 	if err := tx.RawQuery(
-		fmt.Sprintf("SELECT g.id AS group_id, u.id AS scim_user_id FROM %q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m JOIN %q u ON u.id = (m->>'value')::uuid WHERE g.id = ANY(?::uuid[]) AND u.sso_provider_id = ? AND u.resource_type = 'User' AND u.deleted_at IS NULL ORDER BY g.id, u.id", scimGroupsTable.tableName, scimUsersTable.tableName),
+		fmt.Sprintf("SELECT g.id AS group_id, r.id AS scim_user_id, r.resource_type AS type FROM %[1]q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m JOIN %[1]q r ON r.id = (m->>'value')::uuid WHERE g.id = ANY(?::uuid[]) AND r.sso_provider_id = ? AND r.deleted_at IS NULL ORDER BY g.id, r.id", scimGroupsTable.tableName),
 		groupIDs, providerID,
 	).All(&members); err != nil {
 		return nil, errors.Wrap(err, "error finding SCIM group members")
@@ -97,8 +99,18 @@ func FindSCIMMembershipsByUser(tx *storage.Connection, providerID uuid.UUID, sci
 		return memberships, nil
 	}
 	if err := tx.RawQuery(
-		fmt.Sprintf("SELECT g.id AS group_id, (m->>'value')::uuid AS scim_user_id, g.resource->>'displayName' AS display FROM %q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m WHERE m->>'value' = ANY(?::text[]) AND g.sso_provider_id = ? AND g.resource_type = 'Group' AND g.deleted_at IS NULL ORDER BY scim_user_id, lower(g.resource->>'displayName') COLLATE \"C\", g.id", scimGroupsTable.tableName),
-		uuidStrings(scimUserIDs), providerID,
+		fmt.Sprintf(`WITH RECURSIVE memberships (scim_user_id, group_id, direct) AS (
+  SELECT (m->>'value')::uuid, g.id, true FROM %[1]q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m
+  WHERE m->>'value' = ANY(?::text[]) AND g.sso_provider_id = ? AND g.resource_type = 'Group' AND g.deleted_at IS NULL
+  UNION
+  SELECT ms.scim_user_id, p.id, false FROM memberships ms JOIN %[1]q p ON p.resource->'members' @> jsonb_build_array(jsonb_build_object('value', ms.group_id::text))
+  WHERE p.sso_provider_id = ? AND p.resource_type = 'Group' AND p.deleted_at IS NULL
+)
+SELECT ms.group_id, ms.scim_user_id, g.resource->>'displayName' AS display, CASE WHEN bool_or(ms.direct) THEN 'direct' ELSE 'indirect' END AS type
+FROM memberships ms JOIN %[1]q g ON g.id = ms.group_id
+GROUP BY ms.group_id, ms.scim_user_id, g.resource
+ORDER BY ms.scim_user_id, lower(g.resource->>'displayName') COLLATE "C", ms.group_id`, scimGroupsTable.tableName),
+		uuidStrings(scimUserIDs), providerID, providerID,
 	).All(&memberships); err != nil {
 		return nil, errors.Wrap(err, "error finding SCIM groups for users")
 	}
@@ -123,32 +135,47 @@ func ReplaceSCIMGroupMembersFrom(tx *storage.Connection, group *SCIMGroup, curre
 	if !change.Changed() {
 		return group, change, nil
 	}
-	if len(change.Added) > 0 {
-		if err := requireLiveSCIMUsers(tx, group.SSOProviderID, change.Added); err != nil {
-			return nil, change, err
-		}
+	added, err := resolveSCIMGroupMembers(tx, group, change.Added)
+	if err != nil {
+		return nil, change, err
 	}
 	updated := &SCIMGroup{}
 	if err := tx.RawQuery(
 		fmt.Sprintf(`UPDATE %q SET resource = jsonb_set(resource, '{members}', (
-  SELECT coalesce(jsonb_agg(jsonb_build_object('value', value, 'type', 'User') ORDER BY value), '[]'::jsonb) FROM (
-    SELECT m->>'value' AS value FROM jsonb_array_elements(coalesce(resource->'members', '[]'::jsonb)) m WHERE m->>'value' <> ALL(?::text[])
-    UNION SELECT unnest(?::text[])
+  SELECT coalesce(jsonb_agg(member ORDER BY member->>'value'), '[]'::jsonb) FROM (
+    SELECT m AS member FROM jsonb_array_elements(coalesce(resource->'members', '[]'::jsonb)) m WHERE m->>'value' <> ALL(?::text[])
+    UNION SELECT a FROM jsonb_array_elements(?::jsonb) a
   ) members)), updated_at = clock_timestamp() WHERE id = ? RETURNING %s`, scimGroupsTable.tableName, scimGroupsTable.columns),
-		uuidStrings(change.Removed), uuidStrings(change.Added), group.ID,
+		uuidStrings(change.Removed), string(added), group.ID,
 	).First(updated); err != nil {
 		return nil, change, errors.Wrap(err, "error updating SCIM group members")
 	}
-	members, err := scimGroupMemberIDs(updated)
-	change.Members = members
+	change.Members, err = scimGroupMemberIDs(updated)
 	return updated, change, err
 }
 
-func RemoveSCIMUserFromGroups(tx *storage.Connection, scimUserID uuid.UUID) error {
+func RemoveSCIMMemberFromGroups(tx *storage.Connection, memberID uuid.UUID) error {
 	return errors.Wrap(tx.RawQuery(
 		fmt.Sprintf(`UPDATE %q SET resource = jsonb_set(resource, '{members}', (SELECT coalesce(jsonb_agg(m ORDER BY m->>'value'), '[]'::jsonb) FROM jsonb_array_elements(resource->'members') m WHERE m->>'value' <> ?)) WHERE resource_type = 'Group' AND resource->'members' @> jsonb_build_array(jsonb_build_object('value', ?::text))`, scimGroupsTable.tableName),
-		scimUserID.String(), scimUserID.String(),
-	).Exec(), "error removing SCIM user from groups")
+		memberID.String(), memberID.String(),
+	).Exec(), "error removing SCIM member from groups")
+}
+
+func (g SCIMGroup) Members() ([]SCIMGroupMembership, error) {
+	var resource struct {
+		Members []struct {
+			Value uuid.UUID `json:"value"`
+			Type  string    `json:"type"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(g.Resource, &resource); err != nil {
+		return nil, errors.Wrap(err, "error decoding SCIM group members")
+	}
+	members := make([]SCIMGroupMembership, len(resource.Members))
+	for i, member := range resource.Members {
+		members[i] = SCIMGroupMembership{GroupID: g.ID, SCIMUserID: member.Value, Type: member.Type}
+	}
+	return members, nil
 }
 
 func scimGroupMemberIDs(group *SCIMGroup) ([]uuid.UUID, error) {
@@ -175,13 +202,41 @@ func uuidStrings(ids []uuid.UUID) []string {
 	return values
 }
 
-func requireLiveSCIMUsers(tx *storage.Connection, providerID uuid.UUID, ids []uuid.UUID) error {
-	live, err := tx.Q().Where("id = ANY(?::uuid[]) AND sso_provider_id = ? AND resource_type = 'User' AND deleted_at IS NULL", ids, providerID).Count(&SCIMUser{})
-	if err != nil {
-		return errors.Wrap(err, "error finding SCIM group members")
+func resolveSCIMGroupMembers(tx *storage.Connection, group *SCIMGroup, ids []uuid.UUID) ([]byte, error) {
+	if len(ids) == 0 {
+		return []byte("[]"), nil
 	}
-	if live != len(ids) {
-		return ErrSCIMGroupMemberNotFound
+	if slices.Contains(ids, group.ID) {
+		return nil, ErrSCIMGroupCycle
 	}
-	return nil
+	members := []struct {
+		Value uuid.UUID `db:"id" json:"value"`
+		Type  string    `db:"resource_type" json:"type"`
+	}{}
+	if err := tx.RawQuery(
+		fmt.Sprintf("SELECT id, resource_type FROM %q WHERE id = ANY(?::uuid[]) AND sso_provider_id = ? AND resource_type IN ('User', 'Group') AND deleted_at IS NULL ORDER BY id", scimGroupsTable.tableName),
+		ids, group.SSOProviderID,
+	).All(&members); err != nil {
+		return nil, errors.Wrap(err, "error finding SCIM group members")
+	}
+	if len(members) != len(ids) {
+		return nil, ErrSCIMGroupMemberNotFound
+	}
+	var cycle bool
+	if err := tx.RawQuery(
+		fmt.Sprintf(`WITH RECURSIVE descendants (id) AS (
+  SELECT g.id FROM %[1]q g WHERE g.id = ANY(?::uuid[]) AND g.resource_type = 'Group'
+  UNION
+  SELECT (m->>'value')::uuid FROM descendants d JOIN %[1]q g ON g.id = d.id CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m WHERE m->>'type' = 'Group'
+)
+SELECT EXISTS (SELECT 1 FROM descendants WHERE id = ?)`, scimGroupsTable.tableName),
+		ids, group.ID,
+	).First(&cycle); err != nil {
+		return nil, errors.Wrap(err, "error checking SCIM group cycles")
+	}
+	if cycle {
+		return nil, ErrSCIMGroupCycle
+	}
+	encoded, err := json.Marshal(members)
+	return encoded, errors.Wrap(err, "error encoding SCIM group members")
 }

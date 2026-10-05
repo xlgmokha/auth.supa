@@ -17,5 +17,6 @@ var (
 	ErrSCIMStale               = errors.New("SCIM resource has changed since it was read")
 	ErrSCIMUserConflict        = errors.New("SCIM user conflicts with an existing user")
 	ErrSCIMGroupConflict       = errors.New("SCIM group conflicts with an existing group")
-	ErrSCIMGroupMemberNotFound = errors.New("SCIM group member is not a user in this provider")
+	ErrSCIMGroupMemberNotFound = errors.New("SCIM group member is not a user or group in this provider")
+	ErrSCIMGroupCycle          = errors.New("SCIM group membership would create a cycle")
 )

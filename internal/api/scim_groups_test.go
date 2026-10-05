@@ -618,3 +618,27 @@ func (ts *SCIMTestSuite) patchMembers(id string, ops ...string) map[string]any {
 	require.Empty(ts.T(), w.Body.String())
 	return ts.get(ts.TokenA, "/Groups/"+id)
 }
+
+func (ts *SCIMTestSuite) TestNestedGroups() {
+	alice := ts.create(ts.TokenA, userWith("alice@example.com", "a-1"))
+	eng := ts.createGroup(ts.TokenA, groupWith("Engineering", "g-1", alice))
+	platform := ts.createGroup(ts.TokenA, groupWith("Platform", "g-2", eng))
+
+	members := ts.get(ts.TokenA, "/Groups/"+platform)["members"]
+	require.Equal(ts.T(), []any{
+		map[string]any{"value": eng, "$ref": "http://localhost:9999/scim/v2/Groups/" + eng, "type": "Group"},
+	}, members)
+	require.Equal(ts.T(), []any{
+		map[string]any{"value": eng, "$ref": "http://localhost:9999/scim/v2/Groups/" + eng, "display": "Engineering", "type": "direct"},
+		map[string]any{"value": platform, "$ref": "http://localhost:9999/scim/v2/Groups/" + platform, "display": "Platform", "type": "indirect"},
+	}, ts.get(ts.TokenA, "/Users/"+alice)["groups"])
+
+	for _, id := range []string{eng, platform} {
+		got := ts.expect(http.StatusBadRequest, http.MethodPatch, "/Groups/"+eng, patchOp(addMembers(id)))
+		require.Equal(ts.T(), "invalidValue", got["scimType"], id)
+	}
+
+	ts.expect(http.StatusNoContent, http.MethodDelete, "/Groups/"+eng, "")
+	require.Empty(ts.T(), memberValues(ts.get(ts.TokenA, "/Groups/"+platform)))
+	require.NotContains(ts.T(), ts.get(ts.TokenA, "/Users/"+alice), "groups")
+}
