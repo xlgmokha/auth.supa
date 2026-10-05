@@ -62,6 +62,8 @@ type RequestParams interface {
 		RefreshTokenGrantParams |
 		ResendConfirmationParams |
 		SignupParams |
+		SCIMSettingsParams |
+		SCIMTokenParams |
 		SingleSignOnParams |
 		SmsParams |
 		Web3GrantParams |

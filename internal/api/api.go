@@ -404,6 +404,15 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 						r.Get("/", api.adminSSOProvidersGet)
 						r.Put("/", api.adminSSOProvidersUpdate)
 						r.Delete("/", api.adminSSOProvidersDelete)
+
+						r.Route("/scim", func(r *router) {
+							r.Use(api.requireSCIMEnabled)
+
+							r.Get("/", api.adminSCIMGet)
+							r.Put("/", api.adminSCIMUpdate)
+							r.Post("/tokens", api.adminSCIMTokenCreate)
+							r.Delete("/tokens/{token_id}", api.adminSCIMTokenRevoke)
+						})
 					})
 				})
 			})

@@ -61,6 +61,7 @@ const (
 	ErrorCodeSAMLAssertionNoEmail              ErrorCode = "saml_assertion_no_email"
 	ErrorCodeUserAlreadyExists                 ErrorCode = "user_already_exists"
 	ErrorCodeSSOProviderNotFound               ErrorCode = "sso_provider_not_found"
+	ErrorCodeSCIMTokenNotFound                 ErrorCode = "scim_token_not_found"
 	ErrorCodeSSOProviderDisabled               ErrorCode = "sso_provider_disabled"
 	ErrorCodeSAMLMetadataFetchFailed           ErrorCode = "saml_metadata_fetch_failed"
 	ErrorCodeSAMLIdPAlreadyExists              ErrorCode = "saml_idp_already_exists"
