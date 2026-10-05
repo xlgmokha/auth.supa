@@ -118,7 +118,7 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
-	token, err := revokeSCIMToken(db, provider.ID, chi.URLParam(r, "prefix"))
+	token, err := revokeSCIMToken(db, provider.ID, chi.URLParam(r, "token_id"))
 	if err != nil {
 		if models.IsNotFoundError(err) {
 			return apierrors.NewNotFoundError(apierrors.ErrorCodeSCIMTokenNotFound, "SCIM token not found")
@@ -129,8 +129,12 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	return sendJSON(w, http.StatusOK, token)
 }
 
-func revokeSCIMToken(tx *storage.Connection, providerID uuid.UUID, prefix string) (*models.SCIMToken, error) {
-	token, err := models.FindSCIMTokenByPrefix(tx, providerID, prefix)
+func revokeSCIMToken(tx *storage.Connection, providerID uuid.UUID, tokenID string) (*models.SCIMToken, error) {
+	id, err := uuid.FromString(tokenID)
+	if err != nil {
+		return nil, models.SCIMNotFoundError{}
+	}
+	token, err := models.FindSCIMToken(tx, providerID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +143,7 @@ func revokeSCIMToken(tx *storage.Connection, providerID uuid.UUID, prefix string
 	}
 	if err := token.Revoke(tx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return models.FindSCIMTokenByPrefix(tx, providerID, prefix)
+			return models.FindSCIMToken(tx, providerID, id)
 		}
 		return nil, err
 	}

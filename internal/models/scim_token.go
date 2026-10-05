@@ -24,7 +24,7 @@ const (
 )
 
 type SCIMToken struct {
-	ID            uuid.UUID  `json:"-" db:"id"`
+	ID            uuid.UUID  `json:"id" db:"id"`
 	SSOProviderID uuid.UUID  `json:"-" db:"sso_provider_id"`
 	TokenHash     string     `json:"-" db:"token_hash"`
 	Prefix        string     `json:"prefix" db:"prefix"`
@@ -106,20 +106,15 @@ func FindActiveSCIMTokensBySSOProvider(tx *storage.Connection, providerID uuid.U
 	return tokens, nil
 }
 
-func FindSCIMTokenByPrefix(tx *storage.Connection, providerID uuid.UUID, prefix string) (*SCIMToken, error) {
-	tokens := []SCIMToken{}
-	if err := tx.Q().Where("sso_provider_id = ? AND prefix = ?", providerID, prefix).Limit(2).All(&tokens); err != nil {
+func FindSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMToken, error) {
+	token := &SCIMToken{}
+	if err := tx.Q().Where("sso_provider_id = ? AND id = ?", providerID, id).First(token); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, SCIMNotFoundError{}
+		}
 		return nil, errors.Wrap(err, "error finding SCIM token")
 	}
-
-	switch len(tokens) {
-	case 0:
-		return nil, SCIMNotFoundError{}
-	case 1:
-		return &tokens[0], nil
-	default:
-		return nil, errors.Errorf("error finding SCIM token: prefix %q is ambiguous", prefix)
-	}
+	return token, nil
 }
 
 func AuthenticateSCIMToken(tx *storage.Connection, plaintext string) (*SCIMToken, error) {

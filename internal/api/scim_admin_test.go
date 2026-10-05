@@ -45,7 +45,7 @@ func (ts *SCIMTokensTestSuite) TestCreate() {
 
 	var body map[string]any
 	require.NoError(ts.T(), json.Unmarshal(w.Body.Bytes(), &body))
-	require.ElementsMatch(ts.T(), []string{"base_url", "token", "prefix", "created_at", "expires_at", "revoked_at", "last_used_at"}, slices.Collect(maps.Keys(body)))
+	require.ElementsMatch(ts.T(), []string{"base_url", "token", "id", "prefix", "created_at", "expires_at", "revoked_at", "last_used_at"}, slices.Collect(maps.Keys(body)))
 	require.Equal(ts.T(), "http://localhost:9999/scim/v2", body["base_url"])
 	require.Regexp(ts.T(), `^scim_[0-9a-f]{40}$`, body["token"])
 	require.Equal(ts.T(), body["token"].(string)[:12], body["prefix"])
@@ -108,7 +108,7 @@ func (ts *SCIMTokensTestSuite) TestList() {
 	first := ts.create(ts.Provider, map[string]any{})
 	second := ts.create(ts.Provider, map[string]any{})
 	ts.create(createSCIMEnabledProvider(ts.T(), ts.API.db), map[string]any{})
-	ts.revoke(second.Prefix)
+	ts.revoke(second.ID.String())
 
 	w = ts.request(http.MethodGet, ts.tokensPath(ts.Provider), nil)
 	require.Equal(ts.T(), http.StatusOK, w.Code)
@@ -120,13 +120,13 @@ func (ts *SCIMTokensTestSuite) TestList() {
 	}
 	require.NoError(ts.T(), json.Unmarshal(w.Body.Bytes(), &body))
 	require.Len(ts.T(), body.Tokens, 2)
-	require.ElementsMatch(ts.T(), []string{"prefix", "created_at", "expires_at", "revoked_at", "last_used_at"}, slices.Collect(maps.Keys(body.Tokens[0])))
+	require.ElementsMatch(ts.T(), []string{"id", "prefix", "created_at", "expires_at", "revoked_at", "last_used_at"}, slices.Collect(maps.Keys(body.Tokens[0])))
 	require.ElementsMatch(ts.T(), []any{first.Prefix, second.Prefix}, []any{body.Tokens[0]["prefix"], body.Tokens[1]["prefix"]})
 }
 
 func (ts *SCIMTokensTestSuite) TestRevoke() {
 	created := ts.create(ts.Provider, map[string]any{})
-	path := ts.tokensPath(ts.Provider) + "/" + created.Prefix
+	path := ts.tokensPath(ts.Provider) + "/" + created.ID.String()
 
 	w := ts.request(http.MethodDelete, path, nil)
 	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
@@ -144,10 +144,10 @@ func (ts *SCIMTokensTestSuite) TestRevoke() {
 	require.True(ts.T(), revoked.RevokedAt.Equal(*again.RevokedAt))
 }
 
-func (ts *SCIMTokensTestSuite) TestRevokeUnknownPrefix() {
+func (ts *SCIMTokensTestSuite) TestRevokeUnknownToken() {
 	created := ts.create(createSCIMEnabledProvider(ts.T(), ts.API.db), map[string]any{})
-	for _, prefix := range []string{"scim_0000000", created.Prefix} {
-		w := ts.request(http.MethodDelete, ts.tokensPath(ts.Provider)+"/"+prefix, nil)
+	for _, id := range []string{"not-a-uuid", uuid.Must(uuid.NewV4()).String(), created.ID.String()} {
+		w := ts.request(http.MethodDelete, ts.tokensPath(ts.Provider)+"/"+id, nil)
 		require.Equal(ts.T(), http.StatusNotFound, w.Code)
 		require.Contains(ts.T(), w.Body.String(), "scim_token_not_found")
 	}
@@ -161,7 +161,7 @@ func (ts *SCIMTokensTestSuite) TestRequiresAdmin() {
 		{http.MethodDelete, ts.scimPath(ts.Provider)},
 		{http.MethodGet, ts.tokensPath(ts.Provider)},
 		{http.MethodPost, ts.tokensPath(ts.Provider)},
-		{http.MethodDelete, ts.tokensPath(ts.Provider) + "/" + created.Prefix},
+		{http.MethodDelete, ts.tokensPath(ts.Provider) + "/" + created.ID.String()},
 	} {
 		w := httptest.NewRecorder()
 		ts.API.handler.ServeHTTP(w, httptest.NewRequest(route.method, route.path, nil))
@@ -199,7 +199,7 @@ func (ts *SCIMTokensTestSuite) TestStatus() {
 	ts.expectStatus(http.MethodGet, ts.Provider, true, 0)
 
 	active := ts.create(ts.Provider, map[string]any{})
-	ts.revoke(ts.create(ts.Provider, map[string]any{}).Prefix)
+	ts.revoke(ts.create(ts.Provider, map[string]any{}).ID.String())
 	ts.create(createSCIMEnabledProvider(ts.T(), ts.API.db), map[string]any{})
 
 	w := ts.request(http.MethodGet, ts.scimPath(ts.Provider), nil)
@@ -218,7 +218,7 @@ func (ts *SCIMTokensTestSuite) TestEnableWithZeroTokens() {
 func (ts *SCIMTokensTestSuite) TestEnableAndDisableLeaveTokensUnchanged() {
 	ts.create(ts.Provider, map[string]any{})
 	expiring := ts.create(ts.Provider, map[string]any{"expires_at": time.Now().Add(time.Hour)})
-	ts.revoke(ts.create(ts.Provider, map[string]any{}).Prefix)
+	ts.revoke(ts.create(ts.Provider, map[string]any{}).ID.String())
 	before, err := models.FindSCIMTokensBySSOProvider(ts.API.db, ts.Provider.ID)
 	require.NoError(ts.T(), err)
 	require.NotNil(ts.T(), expiring.ExpiresAt)
@@ -254,7 +254,7 @@ func (ts *SCIMTokensTestSuite) TestReenableRestoresTokensChangedWhileDisabled() 
 	ts.status(http.MethodDelete, ts.Provider)
 	minted := ts.create(ts.Provider, map[string]any{})
 	revoked := ts.create(ts.Provider, map[string]any{})
-	ts.revoke(revoked.Prefix)
+	ts.revoke(revoked.ID.String())
 	require.Equal(ts.T(), http.StatusUnauthorized, ts.scimRequest(existing.Token).Code)
 	require.Equal(ts.T(), http.StatusUnauthorized, ts.scimRequest(minted.Token).Code)
 
@@ -269,7 +269,7 @@ func (ts *SCIMTokensTestSuite) TestStatusIndependentOfTokens() {
 	require.True(ts.T(), ts.status(http.MethodGet, ts.Provider).Enabled)
 
 	token := ts.create(ts.Provider, map[string]any{})
-	ts.revoke(token.Prefix)
+	ts.revoke(token.ID.String())
 	require.True(ts.T(), ts.status(http.MethodGet, ts.Provider).Enabled)
 
 	ts.create(ts.Provider, map[string]any{})
@@ -317,22 +317,22 @@ func (ts *SCIMTokensTestSuite) TestStatusForDisabledProvider() {
 	third := ts.create(ts.Provider, map[string]any{})
 	ts.expectStatus(http.MethodGet, ts.Provider, false, 3)
 
-	ts.revoke(first.Prefix)
+	ts.revoke(first.ID.String())
 	ts.setProviderDisabled(ts.Provider, false)
 	ts.expectStatus(http.MethodGet, ts.Provider, true, 2)
 	require.Equal(ts.T(), http.StatusOK, ts.scimRequest(second.Token).Code)
 
 	ts.setProviderDisabled(ts.Provider, true)
-	ts.revoke(third.Prefix)
+	ts.revoke(third.ID.String())
 	require.Empty(ts.T(), ts.scimActions(ts.Provider))
 }
 
 func (ts *SCIMTokensTestSuite) TestAuditLog() {
 	first := ts.create(ts.Provider, map[string]any{})
 	second := ts.create(ts.Provider, map[string]any{})
-	ts.revoke(first.Prefix)
-	ts.revoke(first.Prefix)
-	ts.revoke(second.Prefix)
+	ts.revoke(first.ID.String())
+	ts.revoke(first.ID.String())
+	ts.revoke(second.ID.String())
 	ts.status(http.MethodDelete, ts.Provider)
 	ts.status(http.MethodDelete, ts.Provider)
 	ts.status(http.MethodPost, ts.Provider)
@@ -430,7 +430,7 @@ func (ts *SCIMTokensTestSuite) setProviderDisabled(provider *models.SSOProvider,
 	require.NoError(ts.T(), ts.API.db.RawQuery("UPDATE "+provider.TableName()+" SET disabled = ? WHERE id = ?", disabled, provider.ID).Exec())
 }
 
-func (ts *SCIMTokensTestSuite) revoke(prefix string) {
-	w := ts.request(http.MethodDelete, ts.tokensPath(ts.Provider)+"/"+prefix, nil)
+func (ts *SCIMTokensTestSuite) revoke(id string) {
+	w := ts.request(http.MethodDelete, ts.tokensPath(ts.Provider)+"/"+id, nil)
 	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
 }

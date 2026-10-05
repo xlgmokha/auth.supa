@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -156,9 +157,11 @@ func TestSCIM(t *testing.T) {
 		t.Run("Records when a token is used", func(t *testing.T) {
 			require.Equal(t, http.StatusOK, send(api, http.MethodGet, scimUsersPath, bearer, nil).Code)
 
-			found, err := models.FindSCIMTokenByPrefix(api.db, provider.ID, token[:12])
+			found, err := models.FindSCIMTokensBySSOProvider(api.db, provider.ID)
 			require.NoError(t, err)
-			require.NotNil(t, found.LastUsedAt)
+			i := slices.IndexFunc(found, func(candidate models.SCIMToken) bool { return candidate.Prefix == token[:12] })
+			require.NotEqual(t, -1, i)
+			require.NotNil(t, found[i].LastUsedAt)
 		})
 
 		t.Run("Returns a SCIM 404 for an unknown endpoint", func(t *testing.T) {

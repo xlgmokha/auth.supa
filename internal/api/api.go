@@ -418,7 +418,7 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 							r.Route("/tokens", func(r *router) {
 								r.Get("/", api.adminSCIMTokensList)
 								r.Post("/", api.adminSCIMTokensCreate)
-								r.Delete("/{prefix}", api.adminSCIMTokensRevoke)
+								r.Delete("/{token_id}", api.adminSCIMTokensRevoke)
 							})
 						})
 					})

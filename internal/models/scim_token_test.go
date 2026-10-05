@@ -1,7 +1,6 @@
 package models
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -106,26 +105,18 @@ func (ts *SCIMTokenTestSuite) TestFindBySSOProvider() {
 	require.Empty(ts.T(), tokens)
 }
 
-func (ts *SCIMTokenTestSuite) TestFindByPrefix() {
+func (ts *SCIMTokenTestSuite) TestFind() {
 	token, _ := ts.createToken(nil)
 
-	found, err := FindSCIMTokenByPrefix(ts.db, ts.provider.ID, token.Prefix)
+	found, err := FindSCIMToken(ts.db, ts.provider.ID, token.ID)
 	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), token.ID, found.ID)
+	require.Equal(ts.T(), token.Prefix, found.Prefix)
 
-	_, err = FindSCIMTokenByPrefix(ts.db, ts.createProvider().ID, token.Prefix)
+	_, err = FindSCIMToken(ts.db, ts.createProvider().ID, token.ID)
 	require.True(ts.T(), IsNotFoundError(err))
 
-	_, err = FindSCIMTokenByPrefix(ts.db, ts.provider.ID, "scim_0000000")
+	_, err = FindSCIMToken(ts.db, ts.provider.ID, uuid.Must(uuid.NewV4()))
 	require.True(ts.T(), IsNotFoundError(err))
-
-	require.NoError(ts.T(), ts.db.RawQuery(
-		"INSERT INTO scim_tokens (id, sso_provider_id, token_hash, prefix) VALUES (?, ?, ?, ?)",
-		uuid.Must(uuid.NewV4()), ts.provider.ID, strings.Repeat("ab", 32), token.Prefix,
-	).Exec())
-	_, err = FindSCIMTokenByPrefix(ts.db, ts.provider.ID, token.Prefix)
-	require.Error(ts.T(), err)
-	require.False(ts.T(), IsNotFoundError(err))
 }
 
 func (ts *SCIMTokenTestSuite) TestRevoke() {
@@ -138,7 +129,7 @@ func (ts *SCIMTokenTestSuite) TestRevoke() {
 	require.NoError(ts.T(), token.Revoke(ts.db))
 	require.True(ts.T(), revokedAt.Equal(*token.RevokedAt))
 
-	reloaded, err := FindSCIMTokenByPrefix(ts.db, ts.provider.ID, token.Prefix)
+	reloaded, err := FindSCIMToken(ts.db, ts.provider.ID, token.ID)
 	require.NoError(ts.T(), err)
 	require.True(ts.T(), revokedAt.Equal(*reloaded.RevokedAt))
 }
