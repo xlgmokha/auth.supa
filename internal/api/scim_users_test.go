@@ -516,16 +516,75 @@ func (ts *SCIMTestSuite) TestFilterAnyAttribute() {
 	}
 }
 
+func (ts *SCIMTestSuite) TestFilterOperators() {
+	const core = `"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"]`
+	bjensen := ts.create(ts.TokenA, `{`+core+`,"userName":"bjensen@example.com","externalId":"00uB","nickName":"b_j","title":"Tour Guide","profileUrl":"https://example.com/Bjensen","name":{"familyName":"Jensen"},"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User":{"department":"Tour Operations"}}`)
+	jsmith := ts.create(ts.TokenA, `{`+core+`,"userName":"jsmith@example.com","externalId":"00uJ","nickName":"bxj","title":"Tour Guide","name":{"familyName":"Smith"}}`)
+	mmiller := ts.create(ts.TokenA, `{`+core+`,"userName":"mmiller@example.com","nickName":""}`)
+	ts.create(ts.TokenB, `{`+core+`,"userName":"bjensen@example.com","externalId":"00uB","title":"Tour Guide"}`)
+	created := ts.get(ts.TokenA, "/Users/"+jsmith)["meta"].(map[string]any)["created"].(string)
+
+	for filter, want := range map[string][]string{
+		`userName co "JENSEN"`:                        {bjensen},
+		`userName sw "j"`:                             {jsmith},
+		`userName ew "@EXAMPLE.COM"`:                  {bjensen, jsmith, mmiller},
+		`userName gt "c"`:                             {jsmith, mmiller},
+		`userName le "jsmith@example.com"`:            {bjensen, jsmith},
+		`userName ne "BJENSEN@example.com"`:           {jsmith, mmiller},
+		`externalId eq "00ub"`:                        {},
+		`externalId co "B"`:                           {bjensen},
+		`externalId lt "00uC"`:                        {bjensen},
+		`externalId ne "00uB"`:                        {jsmith, mmiller},
+		`externalId pr`:                               {bjensen, jsmith},
+		`profileUrl eq "https://example.com/Bjensen"`: {bjensen},
+		`profileUrl eq "https://example.com/bjensen"`: {},
+		`profileUrl sw "https://example.com/B"`:       {bjensen},
+		`nickName co "_"`:                             {bjensen},
+		`nickName sw "b%"`:                            {},
+		`nickName pr`:                                 {bjensen, jsmith},
+		`title ne "tour guide"`:                       {mmiller},
+		`title ge "TOUR GUIDE"`:                       {bjensen, jsmith},
+		`title pr`:                                    {bjensen, jsmith},
+		`not (title pr)`:                              {mmiller},
+		`not (title eq "tour guide")`:                 {mmiller},
+		`not (title co "guide" or userName sw "m")`:   {},
+		`name pr`:                    {bjensen, jsmith},
+		`name.familyName sw "jen"`:   {bjensen},
+		`name.familyName ne "smith"`: {bjensen, mmiller},
+		`urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department co "operations"`: {bjensen},
+		`urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department pr`:              {bjensen},
+		`active ne false`:                             {bjensen, jsmith, mmiller},
+		`active pr`:                                   {bjensen, jsmith, mmiller},
+		`not (title co "guide")`:                      {mmiller},
+		`not (externalId sw "00u")`:                   {mmiller},
+		`not (name.familyName gt "a")`:                {mmiller},
+		`id eq "` + bjensen + `"`:                     {bjensen},
+		`id ne "` + bjensen + `"`:                     {jsmith, mmiller},
+		`id eq "not-a-uuid"`:                          {},
+		`id pr`:                                       {bjensen, jsmith, mmiller},
+		`meta.created eq "` + created + `"`:           {jsmith},
+		`meta.created gt "` + created + `"`:           {mmiller},
+		`meta.created le "` + created + `"`:           {bjensen, jsmith},
+		`meta.lastModified lt "2000-01-01T00:00:00Z"`: {},
+		`meta.lastModified pr`:                        {bjensen, jsmith, mmiller},
+		`(title pr and not (userName sw "b")) or externalId eq "00uB"`: {bjensen, jsmith},
+		`title pr and (name.familyName eq "smith" or nickName co "_")`: {bjensen, jsmith},
+	} {
+		require.ElementsMatch(ts.T(), want, pluck(ts.list(ts.TokenA, filter)["Resources"], "id"), filter)
+	}
+}
+
 func (ts *SCIMTestSuite) TestUnsupportedFilters() {
 	for _, filter := range []string{
-		`userName co "alice"`,
-		`userName ne "alice"`,
-		`userName pr`,
-		`not (userName eq "a")`,
-		`userName eq "a" and userName co "b"`,
-		`id eq "00000000-0000-0000-0000-000000000000"`,
-		`meta.created eq "2026-01-01T00:00:00Z"`,
+		`userName eq null`,
 		`groups.value eq "00000000-0000-0000-0000-000000000000"`,
+		`emails co "example.com"`,
+		`emails.value sw "a"`,
+		`emails[value co "a"]`,
+		`emails[not (type eq "work")]`,
+		`emails pr`,
+		`photos.value eq "https://example.com/a.jpg"`,
+		`meta.version eq "W/\"1\""`,
 		`emails[type eq "work" and type eq "home"]`,
 		`emails[type eq "work" and (value eq "a" or value eq "b")]`,
 	} {

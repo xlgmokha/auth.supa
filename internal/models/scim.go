@@ -11,30 +11,61 @@ import (
 
 	"github.com/gofrs/uuid"
 	"github.com/pkg/errors"
+	"github.com/supabase-community/scim-go/pkg/filter"
 	"github.com/supabase/auth/internal/storage"
 	"github.com/supabase/auth/internal/utilities"
 )
 
 const scimVersionClause = "(?::timestamptz IS NULL OR updated_at = ?)"
 
-type SCIMAttribute int
+type SCIMColumn int
 
 const (
-	SCIMAttributeName SCIMAttribute = iota + 1
-	SCIMAttributeExternalID
-	SCIMAttributeActive
+	SCIMColumnName SCIMColumn = iota + 1
+	SCIMColumnExternalID
+	SCIMColumnActive
+	SCIMColumnID
+	SCIMColumnCreated
+	SCIMColumnLastModified
 )
 
+var scimOperators = map[filter.Operator]string{
+	filter.OpEquals:            "=",
+	filter.OpNotEquals:         "IS DISTINCT FROM",
+	filter.OpContains:          "LIKE",
+	filter.OpStartsWith:        "LIKE",
+	filter.OpEndsWith:          "LIKE",
+	filter.OpGreaterThan:       ">",
+	filter.OpGreaterThanEquals: ">=",
+	filter.OpLessThan:          "<",
+	filter.OpLessThanEquals:    "<=",
+}
+
+var scimPatterns = map[filter.Operator]string{
+	filter.OpContains:   "%%%s%%",
+	filter.OpStartsWith: "%s%%",
+	filter.OpEndsWith:   "%%%s",
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+
 type SCIMFilter struct {
-	Attribute SCIMAttribute
-	Value     any
-	Match     map[string]any
-	And       []SCIMFilter
-	Or        []SCIMFilter
+	Op     filter.Operator
+	Column SCIMColumn
+	Path   []string
+	Fold   bool
+	Value  any
+	Match  map[string]any
+	And    []SCIMFilter
+	Or     []SCIMFilter
+	Not    *SCIMFilter
 }
 
 func (f SCIMFilter) matchesResource() bool {
 	terms := append(slices.Clone(f.And), f.Or...)
+	if f.Not != nil {
+		terms = append(terms, *f.Not)
+	}
 	return f.Match != nil || slices.ContainsFunc(terms, SCIMFilter.matchesResource)
 }
 
@@ -79,9 +110,9 @@ type scimTable struct {
 	conflict       error
 }
 
-func (t scimTable) where(providerID uuid.UUID, filter SCIMFilter) (string, []any, error) {
+func (t scimTable) where(providerID uuid.UUID, term SCIMFilter) (string, []any, error) {
 	clauses, args := []string{t.scope}, []any{providerID}
-	clause, values, err := t.filter(filter)
+	clause, values, err := t.filter(term)
 	if clause != "" {
 		clauses = append(clauses, clause)
 		args = append(args, values...)
@@ -89,22 +120,80 @@ func (t scimTable) where(providerID uuid.UUID, filter SCIMFilter) (string, []any
 	return strings.Join(clauses, " AND "), args, err
 }
 
-func (t scimTable) filter(filter SCIMFilter) (string, []any, error) {
+func (t scimTable) filter(term SCIMFilter) (string, []any, error) {
 	switch {
-	case filter.Attribute == SCIMAttributeName:
-		return t.nameColumn + ` COLLATE "C" = lower(?)`, []any{filter.Value}, nil
-	case filter.Attribute == SCIMAttributeExternalID:
-		return t.externalColumn + ` COLLATE "C" = ?`, []any{filter.Value}, nil
-	case filter.Attribute == SCIMAttributeActive && filter.Value == true:
-		return t.activeColumn, nil, nil
-	case filter.Attribute == SCIMAttributeActive:
-		return "NOT " + t.activeColumn, nil, nil
-	case filter.Match != nil:
-		return scimMatch(filter)
-	case len(filter.Or) > 0:
-		return t.join(filter.Or, " OR ")
+	case term.Not != nil:
+		clause, args, err := t.filter(*term.Not)
+		return "NOT coalesce(" + clause + ", false)", args, err
+	case term.Match != nil:
+		return scimMatch(term)
+	case len(term.Or) > 0:
+		return t.join(term.Or, " OR ")
+	case len(term.And) > 0:
+		return t.join(term.And, " AND ")
+	case term.Op == "":
+		return "", nil, nil
+	case term.Op == filter.OpPresent:
+		clause, args := t.present(term)
+		return clause, args, nil
 	}
-	return t.join(filter.And, " AND ")
+	clause, args := t.compare(term)
+	return clause, args, nil
+}
+
+func (t scimTable) compare(term SCIMFilter) (string, []any) {
+	lhs, args := t.operand(term)
+	rhs, value := "?", term.Value
+	text, ok := value.(string)
+	if !ok {
+		return fmt.Sprintf("%s %s %s", lhs, scimOperators[term.Op], rhs), append(args, value)
+	}
+	if term.Fold {
+		rhs = "lower(?)"
+	}
+	if pattern, like := scimPatterns[term.Op]; like {
+		value, rhs = fmt.Sprintf(pattern, likeEscaper.Replace(text)), rhs+` ESCAPE '\'`
+	}
+	return fmt.Sprintf(`%s COLLATE "C" %s %s`, lhs, scimOperators[term.Op], rhs), append(args, value)
+}
+
+func (t scimTable) operand(term SCIMFilter) (string, []any) {
+	switch term.Column {
+	case SCIMColumnName:
+		return t.nameColumn, nil
+	case SCIMColumnExternalID:
+		return t.externalColumn, nil
+	case SCIMColumnActive:
+		return t.activeColumn, nil
+	case SCIMColumnID:
+		return "id::text", nil
+	case SCIMColumnCreated:
+		return "created_at", nil
+	case SCIMColumnLastModified:
+		return "updated_at", nil
+	}
+	clause, args := scimPath("jsonb_extract_path_text", term.Path)
+	if term.Fold {
+		clause = "lower(" + clause + ")"
+	}
+	return clause, args
+}
+
+func (t scimTable) present(term SCIMFilter) (string, []any) {
+	if term.Column != 0 {
+		lhs, args := t.operand(term)
+		return "nullif((" + lhs + ")::text, '') IS NOT NULL", args
+	}
+	clause, args := scimPath("jsonb_extract_path", term.Path)
+	return "coalesce(" + clause + `, 'null') NOT IN ('null', '""', '[]', '{}')`, args
+}
+
+func scimPath(function string, keys []string) (string, []any) {
+	args := make([]any, len(keys))
+	for i, key := range keys {
+		args[i] = key
+	}
+	return function + "(resource" + strings.Repeat(", ?", len(keys)) + ")", args
 }
 
 func (t scimTable) join(terms []SCIMFilter, operator string) (string, []any, error) {
@@ -123,8 +212,8 @@ func (t scimTable) join(terms []SCIMFilter, operator string) (string, []any, err
 	return "(" + strings.Join(clauses, operator) + ")", args, nil
 }
 
-func scimMatch(filter SCIMFilter) (string, []any, error) {
-	match, err := json.Marshal(filter.Match)
+func scimMatch(term SCIMFilter) (string, []any, error) {
+	match, err := json.Marshal(term.Match)
 	return "lower(resource::text)::jsonb @> lower(?)::jsonb", []any{string(match)}, err
 }
 

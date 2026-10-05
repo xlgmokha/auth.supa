@@ -364,13 +364,30 @@ func (ts *SCIMTestSuite) TestGroupsSortAndPaginate() {
 	require.Equal(ts.T(), "invalidValue", body["scimType"])
 }
 
+func (ts *SCIMTestSuite) TestGroupsFilterOperators() {
+	engineering := ts.createGroup(ts.TokenA, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"displayName":"Engineering","externalId":"G-1"}`)
+	finance := ts.createGroup(ts.TokenA, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"displayName":"Finance"}`)
+	ts.createGroup(ts.TokenB, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"displayName":"Engineering"}`)
+
+	for filter, want := range map[string][]string{
+		`displayName co "ENG"`:                   {engineering},
+		`displayName gt "f"`:                     {finance},
+		`displayName pr`:                         {engineering, finance},
+		`not (externalId pr)`:                    {finance},
+		`externalId sw "g"`:                      {},
+		`id eq "` + finance + `"`:                {finance},
+		`meta.created ge "2000-01-01T00:00:00Z"`: {engineering, finance},
+	} {
+		require.ElementsMatch(ts.T(), want, pluck(ts.listGroups(ts.TokenA, filter)["Resources"], "id"), filter)
+	}
+}
+
 func (ts *SCIMTestSuite) TestGroupsUnsupportedFilters() {
 	for _, filter := range []string{
-		`displayName co "eng"`,
 		`members.value eq "00000000-0000-0000-0000-000000000000"`,
 		`members[value eq "00000000-0000-0000-0000-000000000000"]`,
-		`displayName pr`,
-		`id eq "00000000-0000-0000-0000-000000000000"`,
+		`members pr`,
+		`not (members.value eq "00000000-0000-0000-0000-000000000000")`,
 	} {
 		w, body := ts.do(ts.TokenA, http.MethodGet, "/Groups?"+url.Values{"filter": {filter}}.Encode(), "")
 		require.Equal(ts.T(), http.StatusBadRequest, w.Code, filter)

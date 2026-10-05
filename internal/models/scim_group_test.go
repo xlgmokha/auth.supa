@@ -9,6 +9,7 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/supabase-community/scim-go/pkg/filter"
 	"github.com/supabase/auth/internal/storage"
 )
 
@@ -63,7 +64,7 @@ func (ts *SCIMGroupTestSuite) TestFindGroupsFiltersAndSorts() {
 	ts.createGroup(ts.provider.ID, "alpha")
 	ts.createGroup(ts.createProvider().ID, "Alpha")
 
-	groups, total, err := FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{Filter: SCIMFilter{Attribute: SCIMAttributeName, Value: "ALPHA"}, Limit: 10})
+	groups, total, err := FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{Filter: SCIMFilter{Op: filter.OpEquals, Column: SCIMColumnName, Fold: true, Value: "ALPHA"}, Limit: 10})
 	require.NoError(ts.T(), err)
 	require.Equal(ts.T(), 1, total)
 	require.Equal(ts.T(), "alpha", ts.attribute(&groups[0], "displayName"))
