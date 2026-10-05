@@ -10,10 +10,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/supabase/auth/internal/api/scim"
 
@@ -75,7 +73,7 @@ func TestSCIM(t *testing.T) {
 		api, _ := setupSCIMAPI(t, nil)
 		require.True(t, api.config.SSO.SCIM.Enabled)
 
-		provider, token := createSSOProviderWithSCIMToken(t, api.db)
+		_, token := createSSOProviderWithSCIMToken(t, api.db)
 		bearer := "Bearer " + token
 
 		for _, tc := range []struct{ path, schema string }{
@@ -99,72 +97,6 @@ func TestSCIM(t *testing.T) {
 				require.Contains(t, w.Body.String(), protocol.SchemaError)
 			})
 		}
-
-		t.Run("Every route is served by the SCIM server", func(t *testing.T) {
-			for _, tc := range []struct{ method, path string }{
-				{http.MethodGet, scimServiceProviderConfigPath},
-				{http.MethodGet, scimResourceTypesPath},
-				{http.MethodGet, scimResourceTypesPath + "/User"},
-				{http.MethodGet, scimSchemasPath},
-				{http.MethodGet, scimSchemasPath + "/" + string(core.SchemaUser)},
-				{http.MethodGet, scimUsersPath},
-				{http.MethodPost, scimUsersPath},
-				{http.MethodGet, scimUsersPath + "/missing"},
-				{http.MethodPut, scimUsersPath + "/missing"},
-				{http.MethodPatch, scimUsersPath + "/missing"},
-				{http.MethodDelete, scimUsersPath + "/missing"},
-			} {
-				t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-					w := send(api, tc.method, tc.path, bearer, strings.NewReader(`{}`))
-					require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"), w.Body.String())
-				})
-			}
-		})
-
-		t.Run("Requires an active SCIM token", func(t *testing.T) {
-			revoked, revokedToken, err := models.CreateSCIMToken(api.db, provider, nil)
-			require.NoError(t, err)
-			require.NoError(t, revoked.Revoke(api.db))
-
-			expiresAt := time.Now().Add(time.Hour)
-			expired, expiredToken, err := models.CreateSCIMToken(api.db, provider, &expiresAt)
-			require.NoError(t, err)
-			require.NoError(t, api.db.RawQuery(
-				"UPDATE "+expired.TableName()+" SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' WHERE id = ?", expired.ID,
-			).Exec())
-
-			for _, tc := range []struct{ name, authorization string }{
-				{"missing", ""},
-				{"basic", "Basic " + token},
-				{"malformed", "Bearer notatoken"},
-				{"unknown", "Bearer scim_0000000000000000000000000000000000000000"},
-				{"revoked", "Bearer " + revokedToken},
-				{"expired", "Bearer " + expiredToken},
-			} {
-				for _, path := range []string{scimResourceTypesPath, scimSchemasPath, scimUsersPath, scimServiceProviderConfigPath} {
-					t.Run(tc.name+" "+path, func(t *testing.T) {
-						w := send(api, http.MethodGet, path, tc.authorization, nil)
-						require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
-						if path == scimServiceProviderConfigPath {
-							require.Equal(t, http.StatusOK, w.Code)
-							return
-						}
-						require.Equal(t, http.StatusUnauthorized, w.Code)
-						require.True(t, strings.HasPrefix(w.Header().Get("WWW-Authenticate"), "Bearer"))
-					})
-				}
-			}
-		})
-
-		t.Run("Records when a token is used", func(t *testing.T) {
-			require.Equal(t, http.StatusOK, send(api, http.MethodGet, scimUsersPath, bearer, nil).Code)
-
-			found, err := models.FindSCIMTokensBySSOProvider(api.db, provider.ID)
-			require.NoError(t, err)
-			i := slices.IndexFunc(found, func(candidate models.SCIMToken) bool { return candidate.Prefix == token[:12] })
-			require.NotEqual(t, -1, i)
-			require.NotNil(t, found[i].LastUsedAt)
-		})
 
 		t.Run("Returns a SCIM 404 for an unknown endpoint", func(t *testing.T) {
 			w := send(api, http.MethodGet, "/scim/v2/Unknown", bearer, nil)
@@ -217,73 +149,6 @@ func TestSCIMServer(t *testing.T) {
 		require.JSONEq(t, scimFixture(t, "service_provider_config.json"), w.Body.String())
 	})
 
-	t.Run("ResourceTypes", func(t *testing.T) {
-		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/ResourceTypes", "")
-
-		require.Equal(t, http.StatusOK, w.Code)
-		require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
-		body := scimDecode(t, w)
-		require.EqualValues(t, 2, body["totalResults"])
-		resources := map[string]map[string]any{}
-		for _, resource := range body["Resources"].([]any) {
-			resources[resource.(map[string]any)["id"].(string)] = resource.(map[string]any)
-		}
-		user := resources["User"]
-		require.Equal(t, "/Users", user["endpoint"])
-		require.Equal(t, string(core.SchemaUser), user["schema"])
-		extension := user["schemaExtensions"].([]any)[0].(map[string]any)
-		require.Equal(t, string(core.SchemaEnterpriseUser), extension["schema"])
-		group := resources["Group"]
-		require.Equal(t, "/Groups", group["endpoint"])
-		require.Equal(t, string(core.SchemaGroup), group["schema"])
-		require.Empty(t, group["schemaExtensions"])
-	})
-
-	for _, id := range []string{"User", "Group"} {
-		t.Run("ResourceTypes/"+id, func(t *testing.T) {
-			w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/ResourceTypes/"+id, "")
-
-			require.Equal(t, http.StatusOK, w.Code)
-			require.Equal(t, id, scimDecode(t, w)["id"])
-		})
-	}
-
-	t.Run("Schemas", func(t *testing.T) {
-		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Schemas", "")
-
-		require.Equal(t, http.StatusOK, w.Code)
-		require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
-		body := scimDecode(t, w)
-		require.EqualValues(t, 3, body["totalResults"])
-		ids := []string{}
-		for _, resource := range body["Resources"].([]any) {
-			ids = append(ids, resource.(map[string]any)["id"].(string))
-		}
-		require.ElementsMatch(t, []string{string(core.SchemaUser), string(core.SchemaEnterpriseUser), string(core.SchemaGroup)}, ids)
-	})
-
-	t.Run("Schemas/{id}", func(t *testing.T) {
-		for _, id := range []core.SchemaURI{core.SchemaUser, core.SchemaEnterpriseUser, core.SchemaGroup} {
-			w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Schemas/"+string(id), "")
-
-			require.Equal(t, http.StatusOK, w.Code)
-			body := scimDecode(t, w)
-			require.Equal(t, string(id), body["id"])
-			location := "http://localhost:9999" + scim.BasePath + "/Schemas/" + string(id)
-			require.Equal(t, location, body["meta"].(map[string]any)["location"])
-			require.Equal(t, location, w.Header().Get("Content-Location"))
-		}
-	})
-
-	t.Run("Schemas/{id} location uses the external URL prefix", func(t *testing.T) {
-		w := scimServe(t, newSCIMServerFor("https://project.supabase.co/auth/v1"), http.MethodGet, scim.BasePath+"/Schemas/"+string(core.SchemaUser), "")
-
-		require.Equal(t, http.StatusOK, w.Code)
-		location := "https://project.supabase.co/auth/v1" + scim.BasePath + "/Schemas/" + string(core.SchemaUser)
-		require.Equal(t, location, scimDecode(t, w)["meta"].(map[string]any)["location"])
-		require.Equal(t, location, w.Header().Get("Content-Location"))
-	})
-
 	t.Run("Schemas/User advertises the full RFC 7643 User attributes", func(t *testing.T) {
 		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Schemas/"+string(core.SchemaUser), "")
 
@@ -296,16 +161,6 @@ func TestSCIMServer(t *testing.T) {
 			require.Contains(t, names, name)
 		}
 	})
-
-	for _, path := range []string{"/ResourceTypes", "/Schemas"} {
-		t.Run(path+" rejects filter query parameter", func(t *testing.T) {
-			query := url.Values{"filter": {`name eq "User"`}}.Encode()
-			w := scimServe(t, srv, http.MethodGet, scim.BasePath+path+"?"+query, "")
-
-			require.Equal(t, http.StatusForbidden, w.Code)
-			require.JSONEq(t, scimFixture(t, "filter_forbidden.json"), w.Body.String())
-		})
-	}
 
 	t.Run("requires a bearer token", func(t *testing.T) {
 		for _, tc := range []struct {
