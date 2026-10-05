@@ -1,4 +1,4 @@
-package api
+package scim
 
 import (
 	"context"
@@ -28,17 +28,17 @@ import (
 )
 
 const (
-	scimBasePath          = "/scim/v2"
+	BasePath              = "/scim/v2"
 	scimResourceTypeUser  = "User"
 	scimResourceTypeGroup = "Group"
 
-	scimClaimSub           = "sub"
-	scimClaimEmail         = "email"
+	ClaimSub               = "sub"
+	ClaimEmail             = "email"
 	scimClaimEmailVerified = "email_verified"
 )
 
 var (
-	scimRequestKey       = ctxkey.New[*http.Request]("scim_request")
+	RequestKey           = ctxkey.New[*http.Request]("scim_request")
 	scimTokenKey         = ctxkey.New[*models.SCIMToken]("scim_token")
 	scimGroupSnapshotKey = ctxkey.New[*scimGroupSnapshot]("scim_group_snapshot")
 
@@ -57,33 +57,33 @@ var (
 	}
 )
 
-type scimAuditEvent struct {
-	actor      *models.User
-	action     models.AuditAction
-	providerID uuid.UUID
-	traits     map[string]any
+type AuditEvent struct {
+	Actor      *models.User
+	Action     models.AuditAction
+	ProviderID uuid.UUID
+	Traits     map[string]any
 }
 
-func (a *API) newSCIMServer(validate server.TokenValidator, limit func(http.Handler) http.Handler) *server.Server {
+func NewServer(db *storage.Connection, config *conf.GlobalConfiguration, events UserEvents, validate server.TokenValidator, limit func(http.Handler) http.Handler) *server.Server {
 	authenticate := func(next http.Handler) http.Handler {
 		return server.RequireBearerToken(validate)(limit(next))
 	}
-	return server.New(scimBasePath,
+	return server.New(BasePath,
 		core.NewServiceProviderConfig().Filtering(protocol.DefaultLimits.MaxCount).Patching().Sorting().Versioning(),
-		server.WithBaseURL(scimBaseURL(a.config)),
+		server.WithBaseURL(BaseURL(config)),
 		server.ErrorHandler(func(r *http.Request, err error) {
 			observability.GetLogEntry(r).Entry.WithError(err).Error("scim: request failed")
 		}),
 		server.WithResource(server.NewResource[*core.User](scimResourceTypeUser, "/Users", core.SchemaUser, scimUserSchemas.Base().Attributes...).
 			WithExtension(core.SchemaEnterpriseUser, scimUserSchemas.Extensions()[0].Attributes...).
-			WithRepository(a.newSCIMUserRepository())),
+			WithRepository(NewUserRepository(db, config, events))),
 		server.WithResource(server.NewResource[*core.Group](scimResourceTypeGroup, "/Groups", core.SchemaGroup, scimGroupSchemas.Base().Attributes...).
-			WithRepository(&scimGroupRepository{db: a.db, config: a.config})),
+			WithRepository(&scimGroupRepository{db: db, config: config})),
 		server.WithAuthentication(core.NewOAuthBearerToken().AsPrimary(), authenticate),
 	)
 }
 
-func newSCIMTokenValidator(db *storage.Connection) server.TokenValidator {
+func NewTokenValidator(db *storage.Connection) server.TokenValidator {
 	return func(ctx context.Context, candidate string) (context.Context, error) {
 		token, err := models.AuthenticateSCIMToken(db.WithContext(ctx), candidate)
 		if models.IsNotFoundError(err) {
@@ -96,22 +96,22 @@ func newSCIMTokenValidator(db *storage.Connection) server.TokenValidator {
 	}
 }
 
-func (a *API) withSCIMRequest(w http.ResponseWriter, req *http.Request) (context.Context, error) {
-	ctx := scimRequestKey.WithValue(req.Context(), req)
+func WithRequest(w http.ResponseWriter, req *http.Request) (context.Context, error) {
+	ctx := RequestKey.WithValue(req.Context(), req)
 	return scimGroupSnapshotKey.WithValue(ctx, &scimGroupSnapshot{}), nil
 }
 
-func (a *API) newSCIMUserRepository() *scimUserRepository {
-	return &scimUserRepository{db: a.db, config: a.config, events: &scimUserSync{api: a}}
+func NewUserRepository(db *storage.Connection, config *conf.GlobalConfiguration, events UserEvents) *UserRepository {
+	return &UserRepository{db: db, config: config, events: events}
 }
 
-func auditSCIM(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, event scimAuditEvent) error {
-	event.traits["sso_provider_id"] = event.providerID
-	event.traits["outcome"] = "success"
-	return models.NewAuditLogEntry(config.AuditLog, r, tx, event.actor, event.action, utilities.GetIPAddress(r), event.traits)
+func Audit(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, event AuditEvent) error {
+	event.Traits["sso_provider_id"] = event.ProviderID
+	event.Traits["outcome"] = "success"
+	return models.NewAuditLogEntry(config.AuditLog, r, tx, event.Actor, event.Action, utilities.GetIPAddress(r), event.Traits)
 }
 
-func (a *API) deleteSCIMUsers(tx *storage.Connection, r *http.Request, actor *models.User, userID uuid.UUID) error {
+func DeleteUsers(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, actor *models.User, userID uuid.UUID) error {
 	rows, err := models.SoftDeleteSCIMUsersByUserID(tx, userID)
 	if err != nil {
 		return err
@@ -120,16 +120,16 @@ func (a *API) deleteSCIMUsers(tx *storage.Connection, r *http.Request, actor *mo
 		if err := models.RemoveSCIMMemberFromGroups(tx, rows[i].ID); err != nil {
 			return err
 		}
-		event := scimAuditEvent{actor: actor, action: models.SCIMUserDeletedAction, providerID: rows[i].SSOProviderID, traits: scimUserTraits(&rows[i], &userID)}
-		if err := auditSCIM(a.config, tx, r, event); err != nil {
+		event := AuditEvent{Actor: actor, Action: models.SCIMUserDeletedAction, ProviderID: rows[i].SSOProviderID, Traits: scimUserTraits(&rows[i], &userID)}
+		if err := Audit(config, tx, r, event); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func scimBaseURL(config *conf.GlobalConfiguration) string {
-	return strings.TrimRight(config.API.ExternalURL, "/") + scimBasePath
+func BaseURL(config *conf.GlobalConfiguration) string {
+	return strings.TrimRight(config.API.ExternalURL, "/") + BasePath
 }
 
 func scimSearch(query *protocol.SearchRequest, schemas core.Schemas, name string) (models.SCIMQuery, error) {
@@ -176,7 +176,7 @@ func scimEncode(resource core.Resource) ([]byte, error) {
 }
 
 func scimTarget(ctx context.Context, id, version string) (models.SCIMTarget, error) {
-	providerID, err := scimProviderID(ctx)
+	providerID, err := ProviderID(ctx)
 	if err != nil {
 		return models.SCIMTarget{}, err
 	}
@@ -197,7 +197,7 @@ func scimTarget(ctx context.Context, id, version string) (models.SCIMTarget, err
 	return target, nil
 }
 
-func scimProviderID(ctx context.Context) (uuid.UUID, error) {
+func ProviderID(ctx context.Context) (uuid.UUID, error) {
 	token := scimTokenKey.Value(ctx)
 	if token == nil || token.SSOProviderID == uuid.Nil {
 		return uuid.Nil, errors.New("scim: request has no SSO provider")
@@ -205,12 +205,12 @@ func scimProviderID(ctx context.Context) (uuid.UUID, error) {
 	return token.SSOProviderID, nil
 }
 
-func scimProviderType(providerID uuid.UUID) string {
+func ProviderType(providerID uuid.UUID) string {
 	return "sso:" + providerID.String()
 }
 
 func scimRequest(ctx context.Context) (*http.Request, error) {
-	r := scimRequestKey.Value(ctx)
+	r := RequestKey.Value(ctx)
 	if r == nil {
 		return nil, apierrors.NewInternalServerError("SCIM request missing from context")
 	}
@@ -358,7 +358,7 @@ type scimGroupSnapshot struct {
 }
 
 func (s *scimGroupRepository) List(ctx context.Context, query *protocol.SearchRequest) ([]*core.Group, int, error) {
-	providerID, err := scimProviderID(ctx)
+	providerID, err := ProviderID(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -394,7 +394,7 @@ func (s *scimGroupRepository) Read(ctx context.Context, id string) (*core.Group,
 	db := s.db.WithContext(ctx)
 	row, err := models.FindSCIMGroup(db, target.ProviderID, target.ID)
 	if err != nil {
-		return nil, scimError(err)
+		return nil, Error(err)
 	}
 	projection := protocol.ProjectionFrom(ctx)
 	members, err := s.members(db, target.ProviderID, []models.SCIMGroup{*row}, projection)
@@ -415,7 +415,7 @@ func (s *scimGroupRepository) Read(ctx context.Context, id string) (*core.Group,
 }
 
 func (s *scimGroupRepository) Create(ctx context.Context, group *core.Group) (*core.Group, error) {
-	providerID, err := scimProviderID(ctx)
+	providerID, err := ProviderID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +454,7 @@ func (s *scimGroupRepository) Delete(ctx context.Context, group *core.Group) err
 	if err != nil {
 		return err
 	}
-	return scimError(s.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
+	return Error(s.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
 		row, err := models.DeleteSCIMGroup(tx, target)
 		if err != nil {
 			return err
@@ -468,7 +468,7 @@ func (s *scimGroupRepository) Delete(ctx context.Context, group *core.Group) err
 		if err := models.RemoveSCIMMemberFromGroups(tx, row.ID); err != nil {
 			return err
 		}
-		return auditSCIM(s.config, tx, r, scimGroupEvent(r, models.SCIMGroupDeletedAction, row, resource.DisplayName))
+		return Audit(s.config, tx, r, scimGroupEvent(r, models.SCIMGroupDeletedAction, row, resource.DisplayName))
 	}))
 }
 
@@ -514,10 +514,10 @@ func (s *scimGroupRepository) save(ctx context.Context, group *core.Group, write
 		if action == "" {
 			return nil
 		}
-		return auditSCIM(s.config, tx, r, scimGroupEvent(r, action, row, group.DisplayName))
+		return Audit(s.config, tx, r, scimGroupEvent(r, action, row, group.DisplayName))
 	})
 	if err != nil {
-		return nil, scimError(err)
+		return nil, Error(err)
 	}
 	stored, err := row.Members()
 	if err != nil {
@@ -527,7 +527,7 @@ func (s *scimGroupRepository) save(ctx context.Context, group *core.Group, write
 }
 
 func (s *scimGroupRepository) mergeable(ctx context.Context, version string) bool {
-	r := scimRequestKey.Value(ctx)
+	r := RequestKey.Value(ctx)
 	snapshot := scimGroupSnapshotKey.Value(ctx)
 	blindPatch := r != nil && r.Method == http.MethodPatch && (r.Header.Get("If-Match") == "" || r.Header.Get("If-Match") == "*")
 	sameVersion := snapshot != nil && version != "" && snapshot.version == version
@@ -554,7 +554,7 @@ func (s *scimGroupRepository) members(tx *storage.Connection, providerID uuid.UU
 }
 
 func (s *scimGroupRepository) compose(row models.SCIMGroup, members []models.SCIMGroupMembership) (*core.Group, error) {
-	base := scimBaseURL(s.config)
+	base := BaseURL(s.config)
 	group := &core.Group{}
 	if err := json.Unmarshal(row.Resource, group); err != nil {
 		return nil, err
@@ -576,19 +576,19 @@ func (s *scimGroupRepository) compose(row models.SCIMGroup, members []models.SCI
 	return group, nil
 }
 
-func scimGroupEvent(r *http.Request, action models.AuditAction, row *models.SCIMGroup, displayName string) scimAuditEvent {
+func scimGroupEvent(r *http.Request, action models.AuditAction, row *models.SCIMGroup, displayName string) AuditEvent {
 	traits := map[string]any{"scim_group_id": row.ID, "display_name": displayName}
-	return scimAuditEvent{actor: scimActor(r), action: action, providerID: row.SSOProviderID, traits: traits}
+	return AuditEvent{Actor: scimActor(r), Action: action, ProviderID: row.SSOProviderID, Traits: traits}
 }
 
-type scimUserRepository struct {
+type UserRepository struct {
 	db     *storage.Connection
 	config *conf.GlobalConfiguration
-	events scimUserEvents
+	events UserEvents
 }
 
-func (s *scimUserRepository) List(ctx context.Context, query *protocol.SearchRequest) ([]*core.User, int, error) {
-	providerID, err := scimProviderID(ctx)
+func (s *UserRepository) List(ctx context.Context, query *protocol.SearchRequest) ([]*core.User, int, error) {
+	providerID, err := ProviderID(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -608,7 +608,7 @@ func (s *scimUserRepository) List(ctx context.Context, query *protocol.SearchReq
 	return users, total, nil
 }
 
-func (s *scimUserRepository) Read(ctx context.Context, id string) (*core.User, error) {
+func (s *UserRepository) Read(ctx context.Context, id string) (*core.User, error) {
 	target, err := scimTarget(ctx, id, "")
 	if err != nil {
 		return nil, err
@@ -616,7 +616,7 @@ func (s *scimUserRepository) Read(ctx context.Context, id string) (*core.User, e
 	db := s.db.WithContext(ctx)
 	row, err := models.FindSCIMUser(db, target.ProviderID, target.ID)
 	if err != nil {
-		return nil, scimError(err)
+		return nil, Error(err)
 	}
 	users, err := s.render(db, target.ProviderID, []models.SCIMUser{*row}, protocol.ProjectionFrom(ctx))
 	if err != nil {
@@ -625,8 +625,8 @@ func (s *scimUserRepository) Read(ctx context.Context, id string) (*core.User, e
 	return users[0], nil
 }
 
-func (s *scimUserRepository) Create(ctx context.Context, user *core.User) (*core.User, error) {
-	providerID, err := scimProviderID(ctx)
+func (s *UserRepository) Create(ctx context.Context, user *core.User) (*core.User, error) {
+	providerID, err := ProviderID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +652,7 @@ func (s *scimUserRepository) Create(ctx context.Context, user *core.User) (*core
 	})
 }
 
-func (s *scimUserRepository) Update(ctx context.Context, user *core.User) (*core.User, error) {
+func (s *UserRepository) Update(ctx context.Context, user *core.User) (*core.User, error) {
 	target, err := scimTarget(ctx, user.ID, user.Meta.Version)
 	if err != nil {
 		return nil, err
@@ -668,11 +668,11 @@ func (s *scimUserRepository) Update(ctx context.Context, user *core.User) (*core
 	db := s.db.WithContext(ctx)
 	existing, err := models.FindSCIMUser(db, target.ProviderID, target.ID)
 	if err != nil {
-		return nil, scimError(err)
+		return nil, Error(err)
 	}
 	linked, err := models.FindSCIMLinkedUser(db, existing)
 	if err != nil {
-		return nil, scimError(err)
+		return nil, Error(err)
 	}
 	if linked == nil {
 		if err := s.beforeProvision(r, db, target.ProviderID, user); err != nil {
@@ -692,11 +692,11 @@ func (s *scimUserRepository) Update(ctx context.Context, user *core.User) (*core
 		if err != nil || !changed {
 			return row, nil, "", err
 		}
-		return row, nil, models.SCIMUserUpdatedAction, s.events.UserUpdated(tx, r, scimUserUpdate{old: existing, row: row, user: user})
+		return row, nil, models.SCIMUserUpdatedAction, s.events.UserUpdated(tx, r, UserUpdate{Old: existing, Row: row, User: user})
 	})
 }
 
-func (s *scimUserRepository) Delete(ctx context.Context, user *core.User) error {
+func (s *UserRepository) Delete(ctx context.Context, user *core.User) error {
 	target, err := scimTarget(ctx, user.ID, user.Meta.Version)
 	if err != nil {
 		return err
@@ -705,7 +705,7 @@ func (s *scimUserRepository) Delete(ctx context.Context, user *core.User) error 
 	if err != nil {
 		return err
 	}
-	return scimError(s.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
+	return Error(s.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
 		row, err := models.DeleteSCIMUser(tx, target)
 		if err != nil {
 			return err
@@ -720,11 +720,11 @@ func (s *scimUserRepository) Delete(ctx context.Context, user *core.User) error 
 		if err != nil {
 			return err
 		}
-		return auditSCIM(s.config, tx, r, event)
+		return Audit(s.config, tx, r, event)
 	}))
 }
 
-func (s *scimUserRepository) save(db *storage.Connection, r *http.Request, providerID uuid.UUID, write func(*storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error)) (*core.User, error) {
+func (s *UserRepository) save(db *storage.Connection, r *http.Request, providerID uuid.UUID, write func(*storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error)) (*core.User, error) {
 	var saved *core.User
 	var created *models.User
 	err := db.Transaction(func(tx *storage.Connection) error {
@@ -738,7 +738,7 @@ func (s *scimUserRepository) save(db *storage.Connection, r *http.Request, provi
 			if terr != nil {
 				return terr
 			}
-			if terr = auditSCIM(s.config, tx, r, event); terr != nil {
+			if terr = Audit(s.config, tx, r, event); terr != nil {
 				return terr
 			}
 		}
@@ -750,14 +750,14 @@ func (s *scimUserRepository) save(db *storage.Connection, r *http.Request, provi
 		return nil
 	})
 	if err != nil {
-		return nil, scimError(err)
+		return nil, Error(err)
 	}
 	s.events.AfterUserProvisioned(r, db, created)
 	return saved, nil
 }
 
-func (s *scimUserRepository) render(tx *storage.Connection, providerID uuid.UUID, rows []models.SCIMUser, projection protocol.Projection) ([]*core.User, error) {
-	base := scimBaseURL(s.config)
+func (s *UserRepository) render(tx *storage.Connection, providerID uuid.UUID, rows []models.SCIMUser, projection protocol.Projection) ([]*core.User, error) {
+	base := BaseURL(s.config)
 	groups := map[uuid.UUID][]core.GroupMembership{}
 	if projection.Returns("groups") {
 		ids := make([]uuid.UUID, len(rows))
@@ -804,8 +804,8 @@ func (s *scimUserRepository) render(tx *storage.Connection, providerID uuid.UUID
 	return users, nil
 }
 
-func (s *scimUserRepository) beforeProvision(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error {
-	if scimUserEmail(user) == "" {
+func (s *UserRepository) beforeProvision(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error {
+	if UserEmail(user) == "" {
 		return scimerrors.ErrInvalidValue(`"emails" or an email address "userName" is required`)
 	}
 	return s.events.BeforeUserProvisioned(r, db, providerID, user)
@@ -822,7 +822,7 @@ func scimUserResource(user *core.User) ([]byte, error) {
 	return resource, nil
 }
 
-func scimUserEmail(user *core.User) string {
+func UserEmail(user *core.User) string {
 	if email := scimPrimaryEmail(user.Emails); email != "" {
 		return email
 	}
@@ -848,24 +848,24 @@ func scimPrimaryEmail(emails []core.Email) string {
 	return ""
 }
 
-func scimIdentityData(user *core.User) map[string]any {
+func IdentityData(user *core.User) map[string]any {
 	return map[string]any{
-		scimClaimSub:           user.UserName,
-		scimClaimEmail:         scimUserEmail(user),
+		ClaimSub:               user.UserName,
+		ClaimEmail:             UserEmail(user),
 		scimClaimEmailVerified: true,
 	}
 }
 
-func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditAction, row *models.SCIMUser) (scimAuditEvent, error) {
+func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditAction, row *models.SCIMUser) (AuditEvent, error) {
 	linked, err := models.FindSCIMLinkedUser(tx, row)
 	if err != nil {
-		return scimAuditEvent{}, err
+		return AuditEvent{}, err
 	}
 	var userID *uuid.UUID
 	if linked != nil {
 		userID = &linked.ID
 	}
-	return scimAuditEvent{actor: scimActor(r), action: action, providerID: row.SSOProviderID, traits: scimUserTraits(row, userID)}, nil
+	return AuditEvent{Actor: scimActor(r), Action: action, ProviderID: row.SSOProviderID, Traits: scimUserTraits(row, userID)}, nil
 }
 
 func scimUserTraits(row *models.SCIMUser, userID *uuid.UUID) map[string]any {

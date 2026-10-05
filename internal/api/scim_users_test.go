@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/supabase/auth/internal/api/scim"
+
 	"github.com/gofrs/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase-community/scim-go/pkg/core"
@@ -51,10 +53,10 @@ func (ts *SCIMTestSuite) get(token, path string) map[string]any {
 }
 
 func (ts *SCIMTestSuite) repository() (context.Context, server.Repository[*core.User]) {
-	ctx, err := newSCIMTokenValidator(ts.API.db)(context.Background(), ts.TokenA)
+	ctx, err := scim.NewTokenValidator(ts.API.db)(context.Background(), ts.TokenA)
 	require.NoError(ts.T(), err)
-	ctx = scimRequestKey.WithValue(ctx, httptest.NewRequest(http.MethodPost, "/scim/v2/Users", nil))
-	return ctx, ts.API.newSCIMUserRepository()
+	ctx = scim.RequestKey.WithValue(ctx, httptest.NewRequest(http.MethodPost, "/scim/v2/Users", nil))
+	return ctx, scim.NewUserRepository(ts.API.db, ts.API.config, &scimUserSync{api: ts.API})
 }
 
 func (ts *SCIMTestSuite) storedUser(id string) models.SCIMUser {
@@ -541,7 +543,7 @@ func (ts *SCIMTestSuite) TestUnknownID() {
 }
 
 func (ts *SCIMTestSuite) TestRequiresSSOProviderOnContext() {
-	users := ts.API.newSCIMUserRepository()
+	users := scim.NewUserRepository(ts.API.db, ts.API.config, &scimUserSync{api: ts.API})
 
 	_, _, err := users.List(context.Background(), &protocol.SearchRequest{Count: 10})
 	require.Error(ts.T(), err)

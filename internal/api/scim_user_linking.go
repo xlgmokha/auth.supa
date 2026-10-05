@@ -11,25 +11,12 @@ import (
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/provider"
+	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/hooks/v0hooks"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/observability"
 	"github.com/supabase/auth/internal/storage"
 )
-
-type scimUserEvents interface {
-	BeforeUserProvisioned(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error
-	UserProvisioned(tx *storage.Connection, row *models.SCIMUser, user *core.User) (*models.User, error)
-	UserUpdated(tx *storage.Connection, r *http.Request, update scimUserUpdate) error
-	UserDeleted(tx *storage.Connection, row *models.SCIMUser) error
-	AfterUserProvisioned(r *http.Request, db *storage.Connection, created *models.User)
-}
-
-type scimUserUpdate struct {
-	old  *models.SCIMUser
-	row  *models.SCIMUser
-	user *core.User
-}
 
 type scimUserSync struct {
 	api *API
@@ -39,25 +26,25 @@ func (s *scimUserSync) BeforeUserProvisioned(r *http.Request, db *storage.Connec
 	if !s.api.hooksMgr.Enabled(v0hooks.BeforeUserCreated) {
 		return nil
 	}
-	providerType := scimProviderType(providerID)
+	providerType := scim.ProviderType(providerID)
 	decision, err := s.decideAccountLinking(db, providerType, user)
 	if err != nil || decision.Decision != models.CreateAccount {
-		return scimError(err)
+		return scim.Error(err)
 	}
 	candidate, err := s.newUser(providerType, decision, user)
 	if err != nil {
-		return scimError(err)
+		return scim.Error(err)
 	}
 	err = s.api.triggerBeforeUserCreated(r, db, candidate)
 	var httpErr *apierrors.HTTPError
 	if errors.As(err, &httpErr) && httpErr.HTTPStatus < http.StatusInternalServerError {
 		return scimerrors.NewError(httpErr.HTTPStatus, "", httpErr.Message)
 	}
-	return scimError(err)
+	return scim.Error(err)
 }
 
 func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMUser, user *core.User) (*models.User, error) {
-	providerType := scimProviderType(row.SSOProviderID)
+	providerType := scim.ProviderType(row.SSOProviderID)
 	decision, err := s.decideAccountLinking(tx, providerType, user)
 	if err != nil {
 		return nil, err
@@ -72,7 +59,7 @@ func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMU
 		if created, err = s.api.signupNewUser(tx, candidate); err != nil {
 			return nil, err
 		}
-		if _, err := s.api.createNewIdentity(tx, created, providerType, scimIdentityData(user)); err != nil {
+		if _, err := s.api.createNewIdentity(tx, created, providerType, scim.IdentityData(user)); err != nil {
 			return nil, err
 		}
 		linked = created
@@ -82,7 +69,7 @@ func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMU
 			return nil, scimerrors.ErrUniqueness("user is not an SSO user")
 		}
 		if decision.Decision == models.LinkAccount {
-			if _, err := s.api.createNewIdentity(tx, linked, providerType, scimIdentityData(user)); err != nil {
+			if _, err := s.api.createNewIdentity(tx, linked, providerType, scim.IdentityData(user)); err != nil {
 				return nil, err
 			}
 			if err := linked.UpdateAppMetaDataProviders(tx); err != nil {
@@ -100,8 +87,8 @@ func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMU
 	return created, nil
 }
 
-func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, update scimUserUpdate) error {
-	old, row, user := update.old, update.row, update.user
+func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, update scim.UserUpdate) error {
+	old, row, user := update.Old, update.Row, update.User
 	linked, err := models.FindSCIMLinkedUser(tx, old)
 	if err != nil || linked == nil {
 		return err
@@ -112,12 +99,12 @@ func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, upda
 	if err := json.Unmarshal(old.Resource, &stored); err != nil {
 		return err
 	}
-	providerType := scimProviderType(row.SSOProviderID)
-	email := scimUserEmail(user)
+	providerType := scim.ProviderType(row.SSOProviderID)
+	email := scim.UserEmail(user)
 	if stored.UserName != user.UserName {
-		data := map[string]any{scimClaimSub: user.UserName}
+		data := map[string]any{scim.ClaimSub: user.UserName}
 		if email != "" {
-			data[scimClaimEmail] = email
+			data[scim.ClaimEmail] = email
 		}
 		err := models.RenameSCIMIdentity(tx, models.SCIMIdentityRename{
 			UserID:   linked.ID,
@@ -147,7 +134,7 @@ func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, upda
 		if err := linked.ClearAllPendingTokens(tx); err != nil {
 			return err
 		}
-		if err := linked.UpdateUserMetaData(tx, map[string]any{scimClaimEmail: email}); err != nil {
+		if err := linked.UpdateUserMetaData(tx, map[string]any{scim.ClaimEmail: email}); err != nil {
 			return err
 		}
 	}
@@ -175,7 +162,7 @@ func (s *scimUserSync) AfterUserProvisioned(r *http.Request, db *storage.Connect
 }
 
 func (s *scimUserSync) decideAccountLinking(conn *storage.Connection, providerType string, user *core.User) (models.AccountLinkingResult, error) {
-	emails := []provider.Email{{Email: scimUserEmail(user), Verified: true, Primary: true}}
+	emails := []provider.Email{{Email: scim.UserEmail(user), Verified: true, Primary: true}}
 	return models.DetermineAccountLinking(conn, s.api.config, emails, s.api.config.JWT.Aud, providerType, user.UserName)
 }
 
@@ -184,7 +171,7 @@ func (s *scimUserSync) newUser(providerType string, decision models.AccountLinki
 		Provider: providerType,
 		Email:    decision.CandidateEmail.Email,
 		Aud:      s.api.config.JWT.Aud,
-		Data:     scimIdentityData(user),
+		Data:     scim.IdentityData(user),
 	}
 	candidate, err := params.ToUserModel(true)
 	if err != nil {

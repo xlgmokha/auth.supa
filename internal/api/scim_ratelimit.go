@@ -12,13 +12,14 @@ import (
 	"github.com/didip/tollbooth/v5/limiter"
 	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase-community/scim-go/pkg/server"
+	"github.com/supabase/auth/internal/api/scim"
 )
 
 func (a *API) limitSCIMByIP(lmt *limiter.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, err := a.extractBearerToken(r)
-			skipsValidator := err != nil || r.URL.Path == scimBasePath+"/ServiceProviderConfig" || path.Clean(r.URL.Path) != r.URL.Path
+			skipsValidator := err != nil || r.URL.Path == scim.BasePath+"/ServiceProviderConfig" || path.Clean(r.URL.Path) != r.URL.Path
 			if skipsValidator && a.performRateLimiting(lmt, r) != nil {
 				handler(scimTooManyRequests(lmt))(w, r)
 				return
@@ -34,8 +35,8 @@ func (a *API) limitSCIMInvalidToken(validate server.TokenValidator, lmt *limiter
 		if !errors.Is(err, server.ErrInvalidToken) {
 			return next, err
 		}
-		if r := scimRequestKey.Value(ctx); r != nil && a.performRateLimiting(lmt, r) != nil {
-			return ctx, errSCIMTooManyRequests()
+		if r := scim.RequestKey.Value(ctx); r != nil && a.performRateLimiting(lmt, r) != nil {
+			return ctx, scim.ErrTooManyRequests()
 		}
 		return next, err
 	}
@@ -44,7 +45,7 @@ func (a *API) limitSCIMInvalidToken(validate server.TokenValidator, lmt *limiter
 func (a *API) limitSCIMByProvider(lmt *limiter.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if providerID, err := scimProviderID(r.Context()); err == nil && tollbooth.LimitByKeys(lmt, []string{providerID.String()}) != nil {
+			if providerID, err := scim.ProviderID(r.Context()); err == nil && tollbooth.LimitByKeys(lmt, []string{providerID.String()}) != nil {
 				handler(scimTooManyRequests(lmt))(w, r)
 				return
 			}
@@ -58,6 +59,6 @@ func scimTooManyRequests(lmt *limiter.Limiter) apiHandler {
 		if perSecond := lmt.GetMax(); perSecond > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(1/perSecond))))
 		}
-		return protocol.SendError(w, errSCIMTooManyRequests())
+		return protocol.SendError(w, scim.ErrTooManyRequests())
 	}
 }

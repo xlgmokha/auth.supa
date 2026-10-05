@@ -1,4 +1,4 @@
-package api
+package scim
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 	"github.com/supabase/auth/internal/models"
 )
 
-func scimError(err error) error {
+func Error(err error) error {
 	switch {
 	case models.IsNotFoundError(err):
 		return errSCIMNotFound()
@@ -38,6 +38,6 @@ func errSCIMMemberNotFound() error {
 	return scimerrors.ErrInvalidValue(`"members.value" must reference a User or Group in this provider`)
 }
 
-func errSCIMTooManyRequests() error {
+func ErrTooManyRequests() error {
 	return scimerrors.NewError(http.StatusTooManyRequests, "", "Request rate limit reached")
 }

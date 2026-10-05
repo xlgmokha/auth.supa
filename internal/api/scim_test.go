@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/supabase/auth/internal/api/scim"
+
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -201,14 +203,14 @@ func TestSCIMServer(t *testing.T) {
 	require.NotNil(t, srv)
 
 	t.Run("NewServer trims a trailing slash from the external URL", func(t *testing.T) {
-		w := scimServe(t, newSCIMServerFor("https://auth.example.com/"), http.MethodGet, scimBasePath+"/ServiceProviderConfig", "")
+		w := scimServe(t, newSCIMServerFor("https://auth.example.com/"), http.MethodGet, scim.BasePath+"/ServiceProviderConfig", "")
 
 		meta := scimDecode(t, w)["meta"].(map[string]any)
-		require.Equal(t, "https://auth.example.com"+scimBasePath+"/ServiceProviderConfig", meta["location"])
+		require.Equal(t, "https://auth.example.com"+scim.BasePath+"/ServiceProviderConfig", meta["location"])
 	})
 
 	t.Run("ServiceProviderConfig", func(t *testing.T) {
-		w := scimServe(t, srv, http.MethodGet, scimBasePath+"/ServiceProviderConfig", "")
+		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/ServiceProviderConfig", "")
 
 		require.Equal(t, http.StatusOK, w.Code)
 		require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
@@ -216,7 +218,7 @@ func TestSCIMServer(t *testing.T) {
 	})
 
 	t.Run("ResourceTypes", func(t *testing.T) {
-		w := scimServe(t, srv, http.MethodGet, scimBasePath+"/ResourceTypes", "")
+		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/ResourceTypes", "")
 
 		require.Equal(t, http.StatusOK, w.Code)
 		require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
@@ -239,7 +241,7 @@ func TestSCIMServer(t *testing.T) {
 
 	for _, id := range []string{"User", "Group"} {
 		t.Run("ResourceTypes/"+id, func(t *testing.T) {
-			w := scimServe(t, srv, http.MethodGet, scimBasePath+"/ResourceTypes/"+id, "")
+			w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/ResourceTypes/"+id, "")
 
 			require.Equal(t, http.StatusOK, w.Code)
 			require.Equal(t, id, scimDecode(t, w)["id"])
@@ -247,7 +249,7 @@ func TestSCIMServer(t *testing.T) {
 	}
 
 	t.Run("Schemas", func(t *testing.T) {
-		w := scimServe(t, srv, http.MethodGet, scimBasePath+"/Schemas", "")
+		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Schemas", "")
 
 		require.Equal(t, http.StatusOK, w.Code)
 		require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
@@ -262,28 +264,28 @@ func TestSCIMServer(t *testing.T) {
 
 	t.Run("Schemas/{id}", func(t *testing.T) {
 		for _, id := range []core.SchemaURI{core.SchemaUser, core.SchemaEnterpriseUser, core.SchemaGroup} {
-			w := scimServe(t, srv, http.MethodGet, scimBasePath+"/Schemas/"+string(id), "")
+			w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Schemas/"+string(id), "")
 
 			require.Equal(t, http.StatusOK, w.Code)
 			body := scimDecode(t, w)
 			require.Equal(t, string(id), body["id"])
-			location := "http://localhost:9999" + scimBasePath + "/Schemas/" + string(id)
+			location := "http://localhost:9999" + scim.BasePath + "/Schemas/" + string(id)
 			require.Equal(t, location, body["meta"].(map[string]any)["location"])
 			require.Equal(t, location, w.Header().Get("Content-Location"))
 		}
 	})
 
 	t.Run("Schemas/{id} location uses the external URL prefix", func(t *testing.T) {
-		w := scimServe(t, newSCIMServerFor("https://project.supabase.co/auth/v1"), http.MethodGet, scimBasePath+"/Schemas/"+string(core.SchemaUser), "")
+		w := scimServe(t, newSCIMServerFor("https://project.supabase.co/auth/v1"), http.MethodGet, scim.BasePath+"/Schemas/"+string(core.SchemaUser), "")
 
 		require.Equal(t, http.StatusOK, w.Code)
-		location := "https://project.supabase.co/auth/v1" + scimBasePath + "/Schemas/" + string(core.SchemaUser)
+		location := "https://project.supabase.co/auth/v1" + scim.BasePath + "/Schemas/" + string(core.SchemaUser)
 		require.Equal(t, location, scimDecode(t, w)["meta"].(map[string]any)["location"])
 		require.Equal(t, location, w.Header().Get("Content-Location"))
 	})
 
 	t.Run("Schemas/User advertises the full RFC 7643 User attributes", func(t *testing.T) {
-		w := scimServe(t, srv, http.MethodGet, scimBasePath+"/Schemas/"+string(core.SchemaUser), "")
+		w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Schemas/"+string(core.SchemaUser), "")
 
 		require.Equal(t, http.StatusOK, w.Code)
 		names := []string{}
@@ -298,7 +300,7 @@ func TestSCIMServer(t *testing.T) {
 	for _, path := range []string{"/ResourceTypes", "/Schemas"} {
 		t.Run(path+" rejects filter query parameter", func(t *testing.T) {
 			query := url.Values{"filter": {`name eq "User"`}}.Encode()
-			w := scimServe(t, srv, http.MethodGet, scimBasePath+path+"?"+query, "")
+			w := scimServe(t, srv, http.MethodGet, scim.BasePath+path+"?"+query, "")
 
 			require.Equal(t, http.StatusForbidden, w.Code)
 			require.JSONEq(t, scimFixture(t, "filter_forbidden.json"), w.Body.String())
@@ -317,7 +319,7 @@ func TestSCIMServer(t *testing.T) {
 			{"invalid token", "Bearer scim_invalid", http.StatusUnauthorized, `Bearer realm="scim", error="invalid_token", error_description="The access token is invalid"`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				w := scimServe(t, srv, http.MethodGet, scimBasePath+"/Users", "", "Authorization", tc.authorization)
+				w := scimServe(t, srv, http.MethodGet, scim.BasePath+"/Users", "", "Authorization", tc.authorization)
 
 				require.Equal(t, tc.status, w.Code)
 				require.Equal(t, protocol.MediaType, w.Header().Get("Content-Type"))
@@ -448,7 +450,7 @@ func newSCIMServerFor(externalURL string) *server.Server {
 		}
 		return ctx, nil
 	}
-	return (&API{config: &conf.GlobalConfiguration{API: conf.APIConfiguration{ExternalURL: externalURL}}}).newSCIMServer(validate, func(next http.Handler) http.Handler { return next })
+	return scim.NewServer(nil, &conf.GlobalConfiguration{API: conf.APIConfiguration{ExternalURL: externalURL}}, nil, validate, func(next http.Handler) http.Handler { return next })
 }
 
 func scimServe(t *testing.T, srv *server.Server, method, path, body string, headers ...string) *httptest.ResponseRecorder {

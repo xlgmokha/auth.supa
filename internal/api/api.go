@@ -14,6 +14,7 @@ import (
 	"github.com/supabase/auth/internal/api/apitask"
 	"github.com/supabase/auth/internal/api/oauthserver"
 	"github.com/supabase/auth/internal/api/provider"
+	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/conf"
 	"github.com/supabase/auth/internal/hooks/hookshttp"
 	"github.com/supabase/auth/internal/hooks/hookspgfunc"
@@ -138,8 +139,8 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 		api.oauthServer = oauthserver.NewServer(globalConfig, db, api.tokenService)
 	}
 
-	api.scim = api.newSCIMServer(
-		api.limitSCIMInvalidToken(newSCIMTokenValidator(db), api.limiterOpts.SCIMIP),
+	api.scim = scim.NewServer(db, globalConfig, &scimUserSync{api: api},
+		api.limitSCIMInvalidToken(scim.NewTokenValidator(db), api.limiterOpts.SCIMIP),
 		api.limitSCIMByProvider(api.limiterOpts.SCIM),
 	)
 
@@ -478,9 +479,9 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 			r.With(api.requireAuthentication).Post("/authorizations/{authorization_id}/consent", api.oauthServer.OAuthServerConsent)
 		})
 
-		r.Route(scimBasePath, func(r *router) {
+		r.Route(scim.BasePath, func(r *router) {
 			r.Use(api.requireScimServerEnabled)
-			r.Use(api.withSCIMRequest)
+			r.Use(scim.WithRequest)
 			r.UseBypass(api.limitSCIMByIP(api.limiterOpts.SCIMIP))
 			r.chi.Handle("/*", api.scim)
 		})
