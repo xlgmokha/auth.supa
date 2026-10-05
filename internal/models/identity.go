@@ -2,6 +2,8 @@ package models
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -155,4 +157,61 @@ func (i *Identity) UpdateIdentityData(tx *storage.Connection, updates map[string
 		i.IdentityData,
 		i.ID,
 	).Exec()
+}
+
+type SCIMIdentityRename struct {
+	UserID   uuid.UUID
+	Provider string
+	From     string
+	To       string
+	Data     map[string]any
+}
+
+type SCIMIdentityEmailChange struct {
+	UserID   uuid.UUID
+	Provider string
+	Subject  string
+	Email    string
+}
+
+func RenameSCIMIdentity(tx *storage.Connection, rename SCIMIdentityRename) error {
+	encoded, err := json.Marshal(rename.Data)
+	if err != nil {
+		return errors.Wrap(err, "error encoding identity data")
+	}
+	table := Identity{}.TableName()
+	if err := tx.RawQuery(
+		fmt.Sprintf("DELETE FROM %[1]q WHERE user_id = ? AND provider = ? AND provider_id <> ? AND (lower(provider_id) = lower(?) OR provider_id = ?) AND EXISTS (SELECT 1 FROM %[1]q WHERE user_id = ? AND provider = ? AND provider_id = ?)", table),
+		rename.UserID, rename.Provider, rename.From, rename.From, rename.To, rename.UserID, rename.Provider, rename.From,
+	).Exec(); err != nil {
+		return errors.Wrap(err, "error removing stale SCIM identities")
+	}
+	count, err := tx.RawQuery(
+		fmt.Sprintf("UPDATE %q SET provider_id = ?, identity_data = identity_data || ?::jsonb, updated_at = now() WHERE user_id = ? AND provider = ? AND provider_id = ?", table),
+		rename.To, string(encoded), rename.UserID, rename.Provider, rename.From,
+	).ExecWithCount()
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrSCIMUserConflict
+		}
+		return errors.Wrap(err, "error renaming SCIM identity")
+	}
+	if count == 0 {
+		return SCIMNotFoundError{}
+	}
+	return nil
+}
+
+func ChangeSCIMIdentityEmail(tx *storage.Connection, change SCIMIdentityEmailChange) error {
+	taken, err := tx.Q().Where("provider = ? AND email = lower(?) AND user_id <> ?", change.Provider, change.Email, change.UserID).Exists(&Identity{})
+	if err != nil {
+		return errors.Wrap(err, "error finding SCIM identity email")
+	}
+	if taken {
+		return ErrSCIMUserConflict
+	}
+	return errors.Wrap(tx.RawQuery(
+		fmt.Sprintf("UPDATE %q SET identity_data = identity_data || jsonb_build_object('email', ?::text), updated_at = now() WHERE user_id = ? AND provider = ? AND provider_id = ?", Identity{}.TableName()),
+		change.Email, change.UserID, change.Provider, change.Subject,
+	).Exec(), "error changing SCIM identity email")
 }
