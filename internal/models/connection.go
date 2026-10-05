@@ -54,6 +54,9 @@ type SortField struct {
 func TruncateAll(conn *storage.Connection) error {
 	return conn.Transaction(func(tx *storage.Connection) error {
 		tables := []string{
+			(&pop.Model{Value: SCIMResource{}}).TableName(),
+			(&pop.Model{Value: SCIMToken{}}).TableName(),
+			(&pop.Model{Value: SCIMDirectory{}}).TableName(),
 			(&pop.Model{Value: User{}}).TableName(),
 			(&pop.Model{Value: Identity{}}).TableName(),
 			(&pop.Model{Value: RefreshToken{}}).TableName(),

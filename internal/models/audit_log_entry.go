@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"maps"
@@ -50,12 +51,19 @@ const (
 	RecoveryCodesVerifiedAction     AuditAction = "recovery_codes_verified"
 	RecoveryCodesRegeneratedAction  AuditAction = "recovery_codes_regenerated"
 	RecoveryCodesDeletedAction      AuditAction = "recovery_codes_deleted"
+	SCIMEnabledAction               AuditAction = "scim_enabled"
+	SCIMDisabledAction              AuditAction = "scim_disabled"
+	SCIMTokenCreatedAction          AuditAction = "scim_token_created"
+	SCIMTokenRevokedAction          AuditAction = "scim_token_revoked"
+	SCIMGroupMemberAddedAction      AuditAction = "scim_group_member_added"
+	SCIMGroupMemberRemovedAction    AuditAction = "scim_group_member_removed"
 
 	account auditLogType = "account"
 	team    auditLogType = "team"
 	token   auditLogType = "token"
 	user    auditLogType = "user"
 	factor  auditLogType = "factor"
+	scim    auditLogType = "scim"
 )
 
 var ActionLogTypeMap = map[AuditAction]auditLogType{
@@ -88,6 +96,12 @@ var ActionLogTypeMap = map[AuditAction]auditLogType{
 	PasskeyCreatedAction:            user,
 	PasskeyUpdatedAction:            user,
 	PasskeyDeletedAction:            user,
+	SCIMEnabledAction:               scim,
+	SCIMDisabledAction:              scim,
+	SCIMTokenCreatedAction:          scim,
+	SCIMTokenRevokedAction:          scim,
+	SCIMGroupMemberAddedAction:      scim,
+	SCIMGroupMemberRemovedAction:    scim,
 }
 
 // AuditLogEntry is the database model for audit log entries.
@@ -106,8 +120,6 @@ func (AuditLogEntry) TableName() string {
 }
 
 func NewAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *storage.Connection, actor *User, action AuditAction, ipAddress string, traits map[string]interface{}) error {
-	id := uuid.Must(uuid.NewV4())
-
 	username := actor.GetEmail()
 
 	if actor.GetPhone() != "" {
@@ -129,6 +141,35 @@ func NewAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *st
 	if traits != nil {
 		payload["traits"] = traits
 	}
+
+	return writeAuditLogEntry(config, r, tx, payload, ipAddress)
+}
+
+// SCIMResourceAction names the audit action for a change to a SCIM resource
+// of any resource type, e.g. scim_user_created or scim_group_deleted.
+func SCIMResourceAction(resourceType, change string) AuditAction {
+	return AuditAction("scim_" + strings.ToLower(resourceType) + "_" + change)
+}
+
+// NewSCIMAuditLogEntry records a change made by an identity provider through
+// SCIM. The provider is the actor, identified by its SSO provider and the
+// prefix of the bearer token it presented.
+func NewSCIMAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *storage.Connection, ssoProviderID uuid.UUID, tokenPrefix string, action AuditAction, ipAddress string, traits map[string]interface{}) error {
+	payload := map[string]interface{}{
+		"actor_id":       ssoProviderID,
+		"actor_via_sso":  true,
+		"actor_username": "scim:" + tokenPrefix,
+		"action":         action,
+		"log_type":       scim,
+	}
+	if traits != nil {
+		payload["traits"] = traits
+	}
+	return writeAuditLogEntry(config, r, tx, payload, ipAddress)
+}
+
+func writeAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *storage.Connection, payload map[string]interface{}, ipAddress string) error {
+	id := uuid.Must(uuid.NewV4())
 
 	observability.LogEntrySetFields(r, logrus.Fields{
 		"auth_event": logrus.Fields(payload),
