@@ -61,7 +61,7 @@ func (a *API) setSCIM(w http.ResponseWriter, r *http.Request, enabled bool) erro
 		if err != nil || !changed {
 			return err
 		}
-		return a.auditSCIM(tx, r, scimAuditEvent{
+		return auditSCIM(a.config, tx, r, scimAuditEvent{
 			actor:      getAdminUser(ctx),
 			action:     action,
 			providerID: provider.ID,
@@ -181,7 +181,7 @@ func (a *API) deprovisionSCIM(tx *storage.Connection, r *http.Request, provider 
 	for i, token := range tokens {
 		prefixes[i] = token.Prefix
 	}
-	return a.auditSCIM(tx, r, scimAuditEvent{
+	return auditSCIM(a.config, tx, r, scimAuditEvent{
 		actor:      getAdminUser(r.Context()),
 		action:     models.SCIMDisabledAction,
 		providerID: provider.ID,

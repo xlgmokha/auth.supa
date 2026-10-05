@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
@@ -11,10 +13,50 @@ import (
 	"github.com/supabase/auth/internal/api/provider"
 	"github.com/supabase/auth/internal/hooks/v0hooks"
 	"github.com/supabase/auth/internal/models"
+	"github.com/supabase/auth/internal/observability"
 	"github.com/supabase/auth/internal/storage"
 )
 
-func (s *scimUserRepository) provisionAuthUser(tx *storage.Connection, row *models.SCIMUser, user *core.User) (*models.User, error) {
+type scimUserEvents interface {
+	BeforeUserProvisioned(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error
+	UserProvisioned(tx *storage.Connection, row *models.SCIMUser, user *core.User) (*models.User, error)
+	UserUpdated(tx *storage.Connection, r *http.Request, update scimUserUpdate) error
+	UserDeleted(tx *storage.Connection, row *models.SCIMUser) error
+	AfterUserProvisioned(r *http.Request, db *storage.Connection, created *models.User)
+}
+
+type scimUserUpdate struct {
+	old  *models.SCIMUser
+	row  *models.SCIMUser
+	user *core.User
+}
+
+type scimUserSync struct {
+	api *API
+}
+
+func (s *scimUserSync) BeforeUserProvisioned(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error {
+	if !s.api.hooksMgr.Enabled(v0hooks.BeforeUserCreated) {
+		return nil
+	}
+	providerType := scimProviderType(providerID)
+	decision, err := s.decideAccountLinking(db, providerType, user)
+	if err != nil || decision.Decision != models.CreateAccount {
+		return scimError(err)
+	}
+	candidate, err := s.newUser(providerType, decision, user)
+	if err != nil {
+		return scimError(err)
+	}
+	err = s.api.triggerBeforeUserCreated(r, db, candidate)
+	var httpErr *apierrors.HTTPError
+	if errors.As(err, &httpErr) && httpErr.HTTPStatus < http.StatusInternalServerError {
+		return scimerrors.NewError(httpErr.HTTPStatus, "", httpErr.Message)
+	}
+	return scimError(err)
+}
+
+func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMUser, user *core.User) (*models.User, error) {
 	providerType := scimProviderType(row.SSOProviderID)
 	decision, err := s.decideAccountLinking(tx, providerType, user)
 	if err != nil {
@@ -63,36 +105,85 @@ func (s *scimUserRepository) provisionAuthUser(tx *storage.Connection, row *mode
 	return created, err
 }
 
-func (s *scimUserRepository) beforeProvision(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error {
-	if scimUserEmail(user) == "" {
-		return scimerrors.ErrInvalidValue(`"emails" or an email address "userName" is required`)
-	}
-	if !s.api.hooksMgr.Enabled(v0hooks.BeforeUserCreated) {
-		return nil
-	}
-	providerType := scimProviderType(providerID)
-	decision, err := s.decideAccountLinking(db, providerType, user)
-	if err != nil || decision.Decision != models.CreateAccount {
-		return scimError(err)
-	}
-	candidate, err := s.newUser(providerType, decision, user)
+func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, update scimUserUpdate) error {
+	old, row, user := update.old, update.row, update.user
+	linked, err := models.FindUserByID(tx, *old.UserID)
 	if err != nil {
-		return scimError(err)
+		return err
 	}
-	err = s.api.triggerBeforeUserCreated(r, db, candidate)
-	var httpErr *apierrors.HTTPError
-	if errors.As(err, &httpErr) && httpErr.HTTPStatus < http.StatusInternalServerError {
-		return scimerrors.NewError(httpErr.HTTPStatus, "", httpErr.Message)
+	var stored struct {
+		UserName string `json:"userName"`
 	}
-	return scimError(err)
+	if err := json.Unmarshal(old.Resource, &stored); err != nil {
+		return err
+	}
+	providerType := scimProviderType(row.SSOProviderID)
+	email := scimUserEmail(user)
+	if stored.UserName != user.UserName {
+		data := map[string]any{scimClaimSub: user.UserName}
+		if email != "" {
+			data[scimClaimEmail] = email
+		}
+		err := models.RenameSCIMIdentity(tx, models.SCIMIdentityRename{
+			UserID:   linked.ID,
+			Provider: providerType,
+			From:     stored.UserName,
+			To:       user.UserName,
+			Data:     data,
+		})
+		if models.IsNotFoundError(err) {
+			observability.GetLogEntry(r).Entry.WithField("user_id", linked.ID).WithField("sso_provider_id", row.SSOProviderID).Warn("scim: identity not found, rename skipped")
+		} else if err != nil {
+			return err
+		}
+	}
+	if email != "" && !strings.EqualFold(email, linked.GetEmail()) {
+		if err := models.ChangeSCIMIdentityEmail(tx, models.SCIMIdentityEmailChange{
+			UserID:   linked.ID,
+			Provider: providerType,
+			Subject:  user.UserName,
+			Email:    email,
+		}); err != nil {
+			return err
+		}
+		if err := linked.SetEmail(tx, strings.ToLower(email)); err != nil {
+			return err
+		}
+		if err := linked.ClearAllPendingTokens(tx); err != nil {
+			return err
+		}
+		if err := linked.UpdateUserMetaData(tx, map[string]any{scimClaimEmail: email}); err != nil {
+			return err
+		}
+	}
+	if old.Active && !row.Active {
+		return models.Logout(tx, linked.ID)
+	}
+	return nil
 }
 
-func (s *scimUserRepository) decideAccountLinking(conn *storage.Connection, providerType string, user *core.User) (models.AccountLinkingResult, error) {
+func (s *scimUserSync) UserDeleted(tx *storage.Connection, row *models.SCIMUser) error {
+	if row.UserID == nil {
+		return nil
+	}
+	return models.Logout(tx, *row.UserID)
+}
+
+func (s *scimUserSync) AfterUserProvisioned(r *http.Request, db *storage.Connection, created *models.User) {
+	if created == nil {
+		return
+	}
+	if err := s.api.triggerAfterUserCreated(r, db, created); err != nil {
+		observability.GetLogEntry(r).Entry.WithError(err).WithField("user_id", created.ID).Error("scim: after user created hook failed")
+	}
+}
+
+func (s *scimUserSync) decideAccountLinking(conn *storage.Connection, providerType string, user *core.User) (models.AccountLinkingResult, error) {
 	emails := []provider.Email{{Email: scimUserEmail(user), Verified: true, Primary: true}}
 	return models.DetermineAccountLinking(conn, s.api.config, emails, s.api.config.JWT.Aud, providerType, user.UserName)
 }
 
-func (s *scimUserRepository) newUser(providerType string, decision models.AccountLinkingResult, user *core.User) (*models.User, error) {
+func (s *scimUserSync) newUser(providerType string, decision models.AccountLinkingResult, user *core.User) (*models.User, error) {
 	params := &SignupParams{
 		Provider: providerType,
 		Email:    decision.CandidateEmail.Email,

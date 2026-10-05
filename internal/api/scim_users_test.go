@@ -54,7 +54,7 @@ func (ts *SCIMTestSuite) repository() (context.Context, server.Repository[*core.
 	ctx, err := newSCIMTokenValidator(ts.API.db)(context.Background(), ts.TokenA)
 	require.NoError(ts.T(), err)
 	ctx = scimRequestKey.WithValue(ctx, httptest.NewRequest(http.MethodPost, "/scim/v2/Users", nil))
-	return ctx, &scimUserRepository{api: ts.API}
+	return ctx, ts.API.newSCIMUserRepository()
 }
 
 func (ts *SCIMTestSuite) storedUser(id string) models.SCIMUser {
@@ -543,7 +543,7 @@ func (ts *SCIMTestSuite) TestUnknownID() {
 }
 
 func (ts *SCIMTestSuite) TestRequiresSSOProviderOnContext() {
-	users := &scimUserRepository{api: ts.API}
+	users := ts.API.newSCIMUserRepository()
 
 	_, _, err := users.List(context.Background(), &protocol.SearchRequest{Count: 10})
 	require.Error(ts.T(), err)
