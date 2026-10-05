@@ -67,6 +67,12 @@ func (ts *SCIMTestSuite) requireSCIMStatus(err error, code int, msg ...any) {
 	require.Equal(ts.T(), code, scimErr.StatusCode(), msg...)
 }
 
+func withVersion(user *core.User, id, version string) *core.User {
+	user.ID = id
+	user.Meta = core.Meta{Version: version}
+	return user
+}
+
 func pluck(items any, field string) []string {
 	values := []string{}
 	for _, item := range items.([]any) {
@@ -183,6 +189,47 @@ func (ts *SCIMTestSuite) TestUniqueIndexIsTheBackstop() {
 
 	_, err = users.Create(ctx, &core.User{UserName: "Alice@Example.com", Emails: emails("alice@example.com")})
 	ts.requireSCIMStatus(err, http.StatusConflict)
+}
+
+func (ts *SCIMTestSuite) TestReplaceRejectsStaleVersion() {
+	ctx, users := ts.repository()
+
+	created, err := users.Create(ctx, &core.User{UserName: "alice@example.com", Emails: emails("alice@example.com")})
+	require.NoError(ts.T(), err)
+	read, err := users.Read(ctx, created.ID)
+	require.NoError(ts.T(), err)
+	require.Equal(ts.T(), created.Meta.Version, read.Meta.Version)
+
+	replaced, err := users.Update(ctx, withVersion(&core.User{UserName: "alice@example.com", Title: "winner"}, read.ID, read.Meta.Version))
+	require.NoError(ts.T(), err)
+	require.NotEqual(ts.T(), read.Meta.Version, replaced.Meta.Version)
+
+	for _, version := range []string{read.Meta.Version, `W/"garbage"`} {
+		_, err = users.Update(ctx, withVersion(&core.User{UserName: "alice@example.com", Title: "loser"}, read.ID, version))
+		ts.requireSCIMStatus(err, http.StatusPreconditionFailed, version)
+	}
+
+	_, err = users.Update(ctx, withVersion(&core.User{UserName: "bob@example.com"}, uuid.Must(uuid.NewV4()).String(), read.Meta.Version))
+	ts.requireSCIMStatus(err, http.StatusNotFound)
+	require.Contains(ts.T(), string(ts.storedUser(read.ID).Resource), "winner")
+}
+
+func (ts *SCIMTestSuite) TestDeleteRejectsStaleVersion() {
+	ctx, users := ts.repository()
+
+	created, err := users.Create(ctx, &core.User{UserName: "alice@example.com", Emails: emails("alice@example.com")})
+	require.NoError(ts.T(), err)
+	replaced, err := users.Update(ctx, withVersion(&core.User{UserName: "alice@example.com", Title: "renamed"}, created.ID, created.Meta.Version))
+	require.NoError(ts.T(), err)
+
+	for _, version := range []string{created.Meta.Version, `W/"garbage"`} {
+		ts.requireSCIMStatus(users.Delete(ctx, withVersion(&core.User{}, created.ID, version)), http.StatusPreconditionFailed, version)
+	}
+	require.Nil(ts.T(), ts.storedUser(created.ID).DeletedAt)
+
+	ts.requireSCIMStatus(users.Delete(ctx, withVersion(&core.User{}, uuid.Must(uuid.NewV4()).String(), "")), http.StatusNotFound)
+	require.NoError(ts.T(), users.Delete(ctx, withVersion(&core.User{}, created.ID, replaced.Meta.Version)))
+	require.NotNil(ts.T(), ts.storedUser(created.ID).DeletedAt)
 }
 
 func (ts *SCIMTestSuite) scimAuditEntries() []models.AuditLogEntry {
