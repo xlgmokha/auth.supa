@@ -10,10 +10,9 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgerrcode"
 	"github.com/pkg/errors"
 	"github.com/supabase/auth/internal/storage"
+	"github.com/supabase/auth/internal/utilities"
 )
 
 const scimVersionClause = "(?::timestamptz IS NULL OR updated_at = ?)"
@@ -153,7 +152,7 @@ func (t scimTable) wrapError(err error, verb string) error {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return SCIMNotFoundError{}
-	case isUniqueViolation(err):
+	case utilities.IsUniqueViolation(err):
 		return t.conflict
 	}
 	return errors.Wrapf(err, "error %s %s", verb, t.label)
@@ -263,16 +262,6 @@ func writeSCIMRow[T any](tx *storage.Connection, table scimTable, target SCIMTar
 		return nil, SCIMNotFoundError{}
 	}
 	return nil, ErrSCIMStale
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
-}
-
-func isCheckViolation(err error, constraint string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.CheckViolation && pgErr.ConstraintName == constraint
 }
 
 func differenceUUIDs(from, subtract []uuid.UUID) []uuid.UUID {

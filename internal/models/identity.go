@@ -11,6 +11,7 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/pkg/errors"
 	"github.com/supabase/auth/internal/storage"
+	"github.com/supabase/auth/internal/utilities"
 )
 
 type Identity struct {
@@ -191,7 +192,7 @@ func RenameSCIMIdentity(tx *storage.Connection, rename SCIMIdentityRename) error
 		rename.To, string(encoded), rename.UserID, rename.Provider, rename.From,
 	).ExecWithCount()
 	if err != nil {
-		if isUniqueViolation(err) {
+		if utilities.IsUniqueViolation(err) {
 			return ErrSCIMUserConflict
 		}
 		return errors.Wrap(err, "error renaming SCIM identity")

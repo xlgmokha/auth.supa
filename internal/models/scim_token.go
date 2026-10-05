@@ -12,6 +12,7 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/pkg/errors"
 	"github.com/supabase/auth/internal/storage"
+	"github.com/supabase/auth/internal/utilities"
 )
 
 const (
@@ -82,7 +83,7 @@ func CreateSCIMToken(tx *storage.Connection, provider *SSOProvider, expiresAt *t
 		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, token_hash, prefix, expires_at) VALUES (?, ?, ?, ?, ?) RETURNING *", token.TableName()),
 		token.ID, token.SSOProviderID, token.TokenHash, token.Prefix, token.ExpiresAt,
 	).First(token); err != nil {
-		if isCheckViolation(err, "scim_tokens_expires_at_future") {
+		if utilities.IsCheckViolation(err, "scim_tokens_expires_at_future") {
 			return nil, "", ErrSCIMTokenExpiry
 		}
 		return nil, "", errors.Wrap(err, "error creating SCIM token")
