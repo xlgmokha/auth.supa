@@ -34,17 +34,9 @@ func (s *groupRepository) List(ctx context.Context, query *protocol.SearchReques
 	if err != nil {
 		return nil, 0, err
 	}
-	members, err := s.members(db, providerID, rows, protocol.ProjectionFrom(ctx))
+	groups, err := s.render(db, providerID, rows, protocol.ProjectionFrom(ctx))
 	if err != nil {
 		return nil, 0, err
-	}
-	groups := make([]*core.Group, 0, len(rows))
-	for _, row := range rows {
-		group, err := s.compose(row, members[row.ID])
-		if err != nil {
-			return nil, 0, err
-		}
-		groups = append(groups, group)
 	}
 	return groups, total, nil
 }
@@ -60,21 +52,14 @@ func (s *groupRepository) Read(ctx context.Context, id string) (*core.Group, err
 		return nil, Error(err)
 	}
 	projection := protocol.ProjectionFrom(ctx)
-	members, err := s.members(db, target.ProviderID, []models.SCIMGroup{*row}, projection)
+	groups, err := s.render(db, target.ProviderID, []models.SCIMGroup{*row}, projection)
 	if err != nil {
 		return nil, err
 	}
-	group, err := s.compose(*row, members[row.ID])
-	if err != nil {
-		return nil, err
+	if projection.Returns("members") {
+		groupSnapshotKey.Value(ctx).record(groups[0])
 	}
-	if snapshot := groupSnapshotKey.Value(ctx); snapshot != nil && projection.Returns("members") {
-		snapshot.members, snapshot.version = make([]uuid.UUID, len(members[row.ID])), group.Meta.Version
-		for i, member := range members[row.ID] {
-			snapshot.members[i] = member.SCIMUserID
-		}
-	}
-	return group, nil
+	return groups[0], nil
 }
 
 func (s *groupRepository) Create(ctx context.Context, group *core.Group) (*core.Group, error) {
@@ -152,9 +137,8 @@ func (s *groupRepository) save(ctx context.Context, group *core.Group, write fun
 	if err != nil {
 		return nil, err
 	}
-	version := group.Meta.Version
 	snapshot := groupSnapshotKey.Value(ctx)
-	tracked := snapshot != nil && version != "" && snapshot.version == version
+	tracked := snapshot.matches(group.Meta.Version)
 	var row *models.SCIMGroup
 	var change models.SCIMGroupMemberChange
 	err = s.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
@@ -191,10 +175,24 @@ func (s *groupRepository) save(ctx context.Context, group *core.Group, write fun
 
 func (s *groupRepository) mergeable(ctx context.Context, version string) bool {
 	r := RequestKey.Value(ctx)
-	snapshot := groupSnapshotKey.Value(ctx)
 	blindPatch := r != nil && r.Method == http.MethodPatch && (r.Header.Get("If-Match") == "" || r.Header.Get("If-Match") == "*")
-	sameVersion := snapshot != nil && version != "" && snapshot.version == version
-	return blindPatch && sameVersion
+	return blindPatch && groupSnapshotKey.Value(ctx).matches(version)
+}
+
+func (s *groupRepository) render(tx *storage.Connection, providerID uuid.UUID, rows []models.SCIMGroup, projection protocol.Projection) ([]*core.Group, error) {
+	members, err := s.members(tx, providerID, rows, projection)
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]*core.Group, 0, len(rows))
+	for _, row := range rows {
+		group, err := s.compose(row, members[row.ID])
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	return groups, nil
 }
 
 func (s *groupRepository) members(tx *storage.Connection, providerID uuid.UUID, rows []models.SCIMGroup, projection protocol.Projection) (map[uuid.UUID][]models.SCIMGroupMembership, error) {
