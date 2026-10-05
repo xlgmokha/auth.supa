@@ -2,6 +2,7 @@ package models
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -151,24 +152,66 @@ func SCIMResourceAction(resourceType, change string) AuditAction {
 	return AuditAction("scim_" + strings.ToLower(resourceType) + "_" + change)
 }
 
-// NewSCIMAuditLogEntry records a change made by an identity provider through
-// SCIM. The provider is the actor, identified by its SSO provider and the
-// prefix of the bearer token it presented.
-func NewSCIMAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *storage.Connection, ssoProviderID uuid.UUID, tokenPrefix string, action AuditAction, ipAddress string, traits map[string]interface{}) error {
-	payload := map[string]interface{}{
-		"actor_id":       ssoProviderID,
-		"actor_via_sso":  true,
-		"actor_username": "scim:" + tokenPrefix,
-		"action":         action,
-		"log_type":       scim,
+// SCIMAuditEvent is one change an identity provider made through SCIM.
+type SCIMAuditEvent struct {
+	Action AuditAction
+	Traits map[string]interface{}
+}
+
+// NewSCIMAuditLogEntries records changes made by an identity provider through
+// SCIM in one insert, however many there are. The provider is the actor,
+// identified by its SSO provider and the prefix of the bearer token it
+// presented.
+func NewSCIMAuditLogEntries(config conf.AuditLogConfiguration, r *http.Request, tx *storage.Connection, ssoProviderID uuid.UUID, tokenPrefix string, ipAddress string, events []SCIMAuditEvent) error {
+	type row struct {
+		ID      uuid.UUID              `json:"id"`
+		Payload map[string]interface{} `json:"payload"`
 	}
-	if traits != nil {
-		payload["traits"] = traits
+	rows := make([]row, len(events))
+	for i, event := range events {
+		payload := map[string]interface{}{
+			"actor_id":       ssoProviderID,
+			"actor_via_sso":  true,
+			"actor_username": "scim:" + tokenPrefix,
+			"action":         event.Action,
+			"log_type":       scim,
+		}
+		if event.Traits != nil {
+			payload["traits"] = event.Traits
+		}
+		entry := logAuditLogEntry(r, payload, ipAddress)
+		rows[i] = row{ID: entry.ID, Payload: payload}
 	}
-	return writeAuditLogEntry(config, r, tx, payload, ipAddress)
+	if config.DisablePostgres || len(rows) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(rows)
+	if err != nil {
+		return errors.Wrap(err, "Error encoding audit log entries")
+	}
+	if err := tx.RawQuery(
+		`insert into audit_log_entries (instance_id, id, payload, created_at, ip_address)
+		select ?, e.id, e.payload, now(), ? from json_to_recordset(?::json) as e(id uuid, payload json)`,
+		uuid.Nil, ipAddress, string(encoded),
+	).Exec(); err != nil {
+		return errors.Wrap(err, "Database error creating audit log entries")
+	}
+	return nil
 }
 
 func writeAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *storage.Connection, payload map[string]interface{}, ipAddress string) error {
+	l := logAuditLogEntry(r, payload, ipAddress)
+	if config.DisablePostgres {
+		return nil
+	}
+	if err := tx.Create(&l); err != nil {
+		return errors.Wrap(err, "Database error creating audit log entry")
+	}
+	return nil
+}
+
+// logAuditLogEntry logs an audit event and returns the entry that stores it.
+func logAuditLogEntry(r *http.Request, payload map[string]interface{}, ipAddress string) AuditLogEntry {
 	id := uuid.Must(uuid.NewV4())
 
 	observability.LogEntrySetFields(r, logrus.Fields{
@@ -206,21 +249,11 @@ func writeAuditLogEntry(config conf.AuditLogConfiguration, r *http.Request, tx *
 		"auth_audit_event": auditLogPayload,
 	}).Info("audit_event")
 
-	if config.DisablePostgres {
-		return nil
-	}
-
-	l := AuditLogEntry{
+	return AuditLogEntry{
 		ID:        id,
 		Payload:   JSONMap(payload),
 		IPAddress: ipAddress,
 	}
-
-	if err := tx.Create(&l); err != nil {
-		return errors.Wrap(err, "Database error creating audit log entry")
-	}
-
-	return nil
 }
 
 func FindAuditLogEntries(tx *storage.Connection, filterColumns []string, filterValue string, pageParams *Pagination) ([]*AuditLogEntry, error) {

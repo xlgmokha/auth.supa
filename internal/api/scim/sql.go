@@ -51,6 +51,12 @@ type scope struct {
 	derived   *derived
 }
 
+// related reports whether the elements in scope are other resources, rather
+// than elements of the document.
+func (s *scope) related() bool {
+	return s.reference != nil || s.derived != nil
+}
+
 // evaluator translates a SCIM filter, RFC 7644 Section 3.4.2.2, into SQL. The
 // filter has already been validated against the schema, so attribute types,
 // operators and literal types are known to be compatible.
@@ -106,13 +112,9 @@ func (e *evaluator) Present(attribute *protocol.Attribute) (fragment, error) {
 		return fragment{}, invalidFilter()
 	}
 	if top.MultiValued {
-		inner, element, err := e.within(attribute.Path, top, func() (fragment, error) {
+		return e.within(attribute.Path, top, func() (fragment, error) {
 			return e.Present(attribute)
 		})
-		if err != nil {
-			return fragment{}, err
-		}
-		return element(inner), nil
 	}
 	return assigned(e.json(attribute.Path, top, definition)), nil
 }
@@ -134,11 +136,7 @@ func (e *evaluator) ValuePath(attribute *protocol.Attribute, valueFilter func() 
 	if top == nil || !top.MultiValued {
 		return fragment{}, invalidFilter()
 	}
-	inner, element, err := e.within(attribute.Path, top, valueFilter)
-	if err != nil {
-		return fragment{}, err
-	}
-	return element(inner), nil
+	return e.within(attribute.Path, top, valueFilter)
 }
 
 // predicate builds the condition for one attribute: for single-valued
@@ -171,13 +169,9 @@ func (e *evaluator) predicate(attribute *protocol.Attribute, test func(target fr
 	if top.MultiValued {
 		// Filters on a multi-valued attribute range over its elements; a
 		// complex one without a sub-attribute compares "value".
-		inner, element, err := e.within(attribute.Path, top, func() (fragment, error) {
+		return e.within(attribute.Path, top, func() (fragment, error) {
 			return e.predicate(attribute, test, op, value)
 		})
-		if err != nil {
-			return fragment{}, err
-		}
-		return element(inner), nil
 	}
 	if k := e.kind.key(top.Name); k != nil && attribute.Path.SubAttribute == "" && attribute.Path.URI == "" {
 		if indexed, ok := e.keyed(k, definition, op, value); ok {
@@ -188,48 +182,41 @@ func (e *evaluator) predicate(attribute *protocol.Attribute, test func(target fr
 }
 
 // within evaluates inner with the elements of the multi-valued attribute top
-// in scope, and returns a function wrapping a condition on one element into a
-// condition on the resource.
-func (e *evaluator) within(path filter.AttrPath, top *core.Attribute, inner func() (fragment, error)) (fragment, func(fragment) fragment, error) {
+// in scope, and returns it as a condition on the resource: that any element
+// matches.
+func (e *evaluator) within(path filter.AttrPath, top *core.Attribute, inner func() (fragment, error)) (fragment, error) {
 	e.aliases++
-	s := &scope{alias: "e" + strconv.Itoa(e.aliases)}
-	var element func(fragment) fragment
-	switch {
-	case e.kind.reference(top.Name) != nil:
-		s.reference = e.kind.reference(top.Name)
-		element = func(condition fragment) fragment {
-			return sqlf(`exists (select 1 from scim_resource_references `+s.alias+`r
-				join scim_resources `+s.alias+` on `+s.alias+`.id = `+s.alias+`r.target_id
-				where `+s.alias+`r.source_id = r.id and `+s.alias+`r.attribute = %s and (%s))`,
-				bind(s.reference.attribute), condition)
-		}
-	case e.kind.derivedAttribute(top.Name) != nil:
-		s.derived = e.kind.derivedAttribute(top.Name)
-		element = func(condition fragment) fragment {
-			return sqlf(`exists (select 1 from scim_resource_references `+s.alias+`r
-				join scim_resources `+s.alias+` on `+s.alias+`.id = `+s.alias+`r.source_id
-				where `+s.alias+`r.target_id = r.id and `+s.alias+`r.attribute = %s and (%s))`,
-				bind(s.derived.via), condition)
-		}
-	default:
-		source := e.document(filter.AttrPath{URI: path.URI, Name: path.Name}, top, top)
-		element = func(condition fragment) fragment {
-			return sqlf("exists (select 1 from jsonb_path_query(%s, '$[*]') as "+s.alias+"(v) where %s)", source, condition)
-		}
-	}
+	s := &scope{alias: "e" + strconv.Itoa(e.aliases), reference: e.kind.reference(top.Name), derived: e.kind.derivedAttribute(top.Name)}
 
 	previous := e.scope
 	e.scope = s
 	condition, err := inner()
 	e.scope = previous
-	return condition, element, err
+	if err != nil {
+		return fragment{}, err
+	}
+
+	switch {
+	case s.reference != nil:
+		return sqlf(`exists (select 1 from scim_resource_references `+s.alias+`r
+			join scim_resources `+s.alias+` on `+s.alias+`.id = `+s.alias+`r.target_id
+			where `+s.alias+`r.source_id = r.id and `+s.alias+`r.attribute = %s and (%s))`,
+			bind(s.reference.attribute), condition), nil
+	case s.derived != nil:
+		return sqlf(`exists (select 1 from scim_resource_references `+s.alias+`r
+			join scim_resources `+s.alias+` on `+s.alias+`.id = `+s.alias+`r.source_id
+			where `+s.alias+`r.target_id = r.id and `+s.alias+`r.attribute = %s and (%s))`,
+			bind(s.derived.via), condition), nil
+	}
+	source := e.document(filter.AttrPath{URI: path.URI, Name: path.Name}, top, top)
+	return sqlf("exists (select 1 from jsonb_path_query(%s, '$[*]') as "+s.alias+"(v) where %s)", source, condition), nil
 }
 
 // referencedID answers "value eq <id>" on a reference by comparing ids as
 // uuids, so the lookup is driven by the primary key of the referenced
 // resource rather than by scanning references.
 func (e *evaluator) referencedID(definition *core.Attribute, op filter.Operator, value any) (fragment, bool) {
-	if e.scope.reference == nil && e.scope.derived == nil {
+	if !e.scope.related() {
 		return fragment{}, false
 	}
 	if op != filter.OpEquals || !strings.EqualFold(definition.Name, "value") {
@@ -249,11 +236,11 @@ func (e *evaluator) referencedID(definition *core.Attribute, op filter.Operator,
 // scoped returns the typed value of a sub-attribute of the element in scope,
 // or of the element itself for a multi-valued attribute of simple values.
 func (e *evaluator) scoped(definition *core.Attribute) (fragment, error) {
-	if e.scope.reference == nil && e.scope.derived == nil && definition.Type == core.TypeComplex {
+	if !e.scope.related() && definition.Type == core.TypeComplex {
 		return fragment{}, invalidFilter()
 	}
 	target, err := e.scopedJSON(definition)
-	if err != nil || e.scope.reference != nil || e.scope.derived != nil {
+	if err != nil || e.scope.related() {
 		return foldColumn(target, definition), err
 	}
 	return typed(target, definition), nil
@@ -263,27 +250,19 @@ func (e *evaluator) scoped(definition *core.Attribute) (fragment, error) {
 // references the values are columns of the referenced resource.
 func (e *evaluator) scopedJSON(definition *core.Attribute) (fragment, error) {
 	alias := e.scope.alias
-	switch {
-	case e.scope.reference != nil:
-		switch strings.ToLower(definition.Name) {
-		case "value":
+	if e.scope.related() {
+		name := strings.ToLower(definition.Name)
+		switch {
+		case name == "value",
+			e.scope.reference != nil && name == strings.ToLower(e.scope.reference.attribute),
+			e.scope.derived != nil && name == strings.ToLower(e.scope.derived.attribute):
 			return raw(alias + ".id::text"), nil
-		case "type":
+		case name == "type" && e.scope.reference != nil:
 			return raw(alias + ".resource_type"), nil
-		case strings.ToLower(e.scope.reference.attribute):
-			return raw(alias + ".id::text"), nil
-		}
-		return fragment{}, invalidFilter()
-	case e.scope.derived != nil:
-		switch strings.ToLower(definition.Name) {
-		case "value":
-			return raw(alias + ".id::text"), nil
-		case "display":
-			return sqlf("("+alias+".resource ->> %s)", bind(e.scope.derived.display)), nil
-		case "type":
+		case name == "type":
 			return raw("'direct'::text"), nil
-		case strings.ToLower(e.scope.derived.attribute):
-			return raw(alias + ".id::text"), nil
+		case name == "display" && e.scope.derived != nil:
+			return sqlf("("+alias+".resource ->> %s)", bind(e.scope.derived.display)), nil
 		}
 		return fragment{}, invalidFilter()
 	}
@@ -472,6 +451,7 @@ func orderBy(kind *resourceType, tenant *Tenant, query *protocol.SearchRequest) 
 	}
 
 	var value fragment
+	e := newEvaluator(kind, tenant)
 	common := &protocol.Attribute{Definition: attribute, Path: path}
 	switch column, ok := commonColumn(common); {
 	case ok && column.sql == "":
@@ -480,7 +460,6 @@ func orderBy(kind *resourceType, tenant *Tenant, query *protocol.SearchRequest) 
 		value = column
 	case parent.MultiValued:
 		// A multi-valued attribute sorts by its primary element, else its first.
-		e := &evaluator{kind: kind, tenant: tenant}
 		source := e.document(filter.AttrPath{URI: path.URI, Name: path.Name}, parent, parent)
 		element := raw("s.v")
 		if !isElementValue(parent) {
@@ -490,7 +469,6 @@ func orderBy(kind *resourceType, tenant *Tenant, query *protocol.SearchRequest) 
 			order by coalesce((s.v -> 'primary') = 'true'::jsonb, false) desc, s.n limit 1)`,
 			typed(element, attribute), source)
 	default:
-		e := &evaluator{kind: kind, tenant: tenant}
 		value = e.document(path, parent, attribute)
 	}
 	// Unassigned values sort last ascending and first descending, as in

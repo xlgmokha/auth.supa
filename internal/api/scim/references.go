@@ -10,24 +10,13 @@ import (
 	"github.com/supabase/auth/internal/storage"
 )
 
-// referenceChange is one reference added to or removed from a resource.
-type referenceChange struct {
-	attribute string
-	target    uuid.UUID
-	added     bool
-}
-
 // currentReferences returns the ids each reference attribute of row points to.
-func (s *Server) currentReferences(tx *storage.Connection, kind *resourceType, row *models.SCIMResource) (map[string][]uuid.UUID, error) {
+func currentReferences(tx *storage.Connection, kind *resourceType, row *models.SCIMResource) (map[string][]uuid.UUID, error) {
 	current := map[string][]uuid.UUID{}
 	for _, ref := range kind.references {
-		references, err := models.FindSCIMReferenceTargets(tx, []uuid.UUID{row.ID}, ref.attribute)
+		targets, err := row.ReferencedIDs(tx, ref.attribute)
 		if err != nil {
 			return nil, err
-		}
-		targets := make([]uuid.UUID, len(references))
-		for i, reference := range references {
-			targets[i] = reference.TargetID
 		}
 		current[ref.attribute] = targets
 	}
@@ -36,62 +25,52 @@ func (s *Server) currentReferences(tx *storage.Connection, kind *resourceType, r
 
 // syncReferences makes row reference exactly the wanted ids, writing only the
 // difference from current, and audits each change.
-func (s *Server) syncReferences(tx *storage.Connection, tenant *Tenant, kind *resourceType, row *models.SCIMResource, wanted map[string][]string, current map[string][]uuid.UUID) ([]referenceChange, error) {
-	changes := []referenceChange{}
-	for _, ref := range kind.references {
-		want, err := uniqueIDs(wanted[ref.attribute])
-		if err != nil {
-			return nil, err
-		}
-		have := current[ref.attribute]
+func (s *Server) syncReferences(tx *storage.Connection, tenant *Tenant, kind *resourceType, row *models.SCIMResource, wanted, current map[string][]uuid.UUID) error {
+	for i := range kind.references {
+		ref := &kind.references[i]
+		want, have := idSet(wanted[ref.attribute]), idSet(current[ref.attribute])
 		var add, remove []uuid.UUID
-		for _, id := range want {
-			if !slices.Contains(have, id) {
+		for _, id := range wanted[ref.attribute] {
+			if _, ok := have[id]; !ok {
 				add = append(add, id)
 			}
 		}
-		for _, id := range have {
-			if !slices.Contains(want, id) {
+		for _, id := range current[ref.attribute] {
+			if _, ok := want[id]; !ok {
 				remove = append(remove, id)
 			}
 		}
-		applied, err := s.applyReferences(tx, tenant, kind, &ref, row, add, remove)
-		if err != nil {
-			return nil, err
+		if _, err := s.applyReferences(tx, tenant, kind, ref, row, add, remove); err != nil {
+			return err
 		}
-		changes = append(changes, applied...)
 	}
-	return changes, nil
+	return nil
 }
 
-// applyReferences adds and removes references from row through ref. Adding a
-// reference that exists or removing one that does not is a no-op.
-func (s *Server) applyReferences(tx *storage.Connection, tenant *Tenant, kind *resourceType, ref *reference, row *models.SCIMResource, add, remove []uuid.UUID) ([]referenceChange, error) {
+// applyReferences adds and removes references from row through ref, audits
+// each change and reports whether there was any. Adding a reference that
+// exists or removing one that does not is a no-op.
+func (s *Server) applyReferences(tx *storage.Connection, tenant *Tenant, kind *resourceType, ref *reference, row *models.SCIMResource, add, remove []uuid.UUID) (bool, error) {
 	if err := s.admitTargets(tx, tenant, kind, ref, row, add); err != nil {
-		return nil, err
+		return false, err
 	}
 	added, err := row.AddReferences(tx, ref.attribute, add)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	removed, err := row.RemoveReferences(tx, ref.attribute, remove)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
-	changes := []referenceChange{}
+	events := make([]models.SCIMAuditEvent, 0, len(added)+len(removed))
 	for _, target := range added {
-		changes = append(changes, referenceChange{attribute: ref.attribute, target: target, added: true})
+		events = append(events, referenceEvent(kind, ref, row.ID, target, true))
 	}
 	for _, target := range removed {
-		changes = append(changes, referenceChange{attribute: ref.attribute, target: target})
+		events = append(events, referenceEvent(kind, ref, row.ID, target, false))
 	}
-	for _, change := range changes {
-		if err := s.auditReferenceChange(tx, tenant, row.ID, change.attribute, change.target, change.added); err != nil {
-			return nil, err
-		}
-	}
-	return changes, nil
+	return len(events) > 0, s.audit(tx, tenant, events...)
 }
 
 // admitTargets checks that every id about to be referenced is a live resource
@@ -102,13 +81,9 @@ func (s *Server) admitTargets(tx *storage.Connection, tenant *Tenant, kind *reso
 	if len(targets) == 0 {
 		return nil
 	}
-	found, err := models.FindSCIMResourcesByID(tx, tenant.DirectoryID, targets, true)
+	types, err := models.LockSCIMResourceTypes(tx, tenant.DirectoryID, targets)
 	if err != nil {
 		return err
-	}
-	types := map[uuid.UUID]string{}
-	for _, target := range found {
-		types[target.ID] = target.ResourceType
 	}
 
 	nested := false
@@ -129,9 +104,12 @@ func (s *Server) admitTargets(tx *storage.Connection, tenant *Tenant, kind *reso
 	if err != nil {
 		return err
 	}
+	cyclic := map[uuid.UUID]struct{}{row.ID: {}}
+	for _, ancestor := range ancestors {
+		cyclic[ancestor.SourceID] = struct{}{}
+	}
 	for _, target := range targets {
-		cyclic := target == row.ID || slices.ContainsFunc(ancestors, func(a models.SCIMAncestor) bool { return a.SourceID == target })
-		if cyclic {
+		if _, ok := cyclic[target]; ok {
 			return scimerrors.ErrInvalidValue(strconv.Quote(target.String()) + " would make " + ref.attribute + " cyclic")
 		}
 	}
@@ -143,55 +121,55 @@ func (s *Server) admitTargets(tx *storage.Connection, tenant *Tenant, kind *reso
 // requests cannot each add half of a cycle. It must run before any resource
 // row is locked, or two such writes could deadlock on each other's rows.
 // Resource types never change, so reading them unlocked is safe.
-func (s *Server) lockNesting(tx *storage.Connection, tenant *Tenant, kind *resourceType, wanted map[string][]string) error {
+func (s *Server) lockNesting(tx *storage.Connection, tenant *Tenant, kind *resourceType, wanted map[string][]uuid.UUID) error {
 	candidates := []uuid.UUID{}
 	for _, ref := range kind.references {
-		if !slices.Contains(ref.targets, kind.name) {
-			continue
-		}
-		for _, value := range wanted[ref.attribute] {
-			if id, err := uuid.FromString(value); err == nil {
-				candidates = append(candidates, id)
-			}
+		if slices.Contains(ref.targets, kind.name) {
+			candidates = append(candidates, wanted[ref.attribute]...)
 		}
 	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	found, err := models.FindSCIMResourcesByID(tx, tenant.DirectoryID, candidates, false)
-	if err != nil {
+	nested, err := models.AnySCIMResourceOfType(tx, tenant.DirectoryID, kind.name, candidates)
+	if err != nil || !nested {
 		return err
-	}
-	if !slices.ContainsFunc(found, func(r *models.SCIMResource) bool { return r.ResourceType == kind.name }) {
-		return nil
 	}
 	return tx.RawQuery("select pg_advisory_xact_lock(hashtextextended(?, 0))", "scim:nesting:"+tenant.DirectoryID.String()).Exec()
 }
 
-func (s *Server) auditReferenceChange(tx *storage.Connection, tenant *Tenant, source uuid.UUID, attribute string, target uuid.UUID, added bool) error {
-	kind := s.typeOfReference(attribute)
-	if kind == nil {
-		return nil
-	}
-	action := kind.reference(attribute).removed
-	if added {
-		action = kind.reference(attribute).added
-	}
-	return s.audit(tx, tenant, action, map[string]any{
-		"resource_id":   source,
-		"resource_type": kind.name,
-		"attribute":     attribute,
-		"member_id":     target,
-	})
-}
-
-func (s *Server) typeOfReference(attribute string) *resourceType {
-	for _, kind := range s.types {
-		if kind.reference(attribute) != nil {
-			return kind
+// referrerEvents audits the references other resources lost when target was
+// deleted, as membership changes of those resources.
+func (s *Server) referrerEvents(target uuid.UUID, removed []models.SCIMReference) []models.SCIMAuditEvent {
+	events := []models.SCIMAuditEvent{}
+	for _, reference := range removed {
+		kind := s.types[reference.SourceType]
+		if kind == nil {
+			continue
+		}
+		if ref := kind.reference(reference.Attribute); ref != nil {
+			events = append(events, referenceEvent(kind, ref, reference.SourceID, target, false))
 		}
 	}
-	return nil
+	return events
+}
+
+func referenceEvent(kind *resourceType, ref *reference, source, target uuid.UUID, added bool) models.SCIMAuditEvent {
+	action := ref.removed
+	if added {
+		action = ref.added
+	}
+	return models.SCIMAuditEvent{Action: action, Traits: map[string]any{
+		"resource_id":   source,
+		"resource_type": kind.name,
+		"attribute":     ref.attribute,
+		"member_id":     target,
+	}}
+}
+
+func idSet(ids []uuid.UUID) map[uuid.UUID]struct{} {
+	set := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
 }
 
 // loadDerived reports, for each of ids, the resources that reference it
@@ -205,12 +183,14 @@ func (s *Server) loadDerived(tx *storage.Connection, tenant *Tenant, d derived, 
 		return nil
 	}
 	sourceIDs := []uuid.UUID{}
+	seen := map[uuid.UUID]struct{}{}
 	for _, ancestor := range ancestors {
-		if !slices.Contains(sourceIDs, ancestor.SourceID) {
+		if _, ok := seen[ancestor.SourceID]; !ok {
+			seen[ancestor.SourceID] = struct{}{}
 			sourceIDs = append(sourceIDs, ancestor.SourceID)
 		}
 	}
-	sources, err := models.FindSCIMResourcesByID(tx, tenant.DirectoryID, sourceIDs, false)
+	sources, err := models.FindSCIMResourcesByID(tx, tenant.DirectoryID, sourceIDs)
 	if err != nil {
 		return err
 	}
@@ -247,9 +227,24 @@ func (s *Server) location(kind *resourceType, id uuid.UUID) string {
 	return s.baseURL + kind.endpoint + "/" + id.String()
 }
 
-func (s *Server) audit(tx *storage.Connection, tenant *Tenant, action models.AuditAction, traits map[string]any) error {
-	traits["sso_provider_id"] = tenant.SSOProviderID
-	traits["directory_id"] = tenant.DirectoryID
-	traits["outcome"] = "success"
-	return models.NewSCIMAuditLogEntry(s.config.AuditLog, tenant.request, tx, tenant.SSOProviderID, tenant.TokenPrefix, action, tenant.ipAddress(), traits)
+// audit records events made by the tenant's identity provider in one write.
+func (s *Server) audit(tx *storage.Connection, tenant *Tenant, events ...models.SCIMAuditEvent) error {
+	for _, event := range events {
+		event.Traits["sso_provider_id"] = tenant.SSOProviderID
+		event.Traits["directory_id"] = tenant.DirectoryID
+		event.Traits["outcome"] = "success"
+	}
+	return models.NewSCIMAuditLogEntries(s.config.AuditLog, tenant.request, tx, tenant.SSOProviderID, tenant.TokenPrefix, tenant.ipAddress(), events)
+}
+
+// resourceEvent is the audit event for a change to row itself.
+func resourceEvent(row *models.SCIMResource, change string) models.SCIMAuditEvent {
+	traits := map[string]any{
+		"resource_id":   row.ID,
+		"resource_type": row.ResourceType,
+	}
+	if row.UserID != nil {
+		traits["user_id"] = *row.UserID
+	}
+	return models.SCIMAuditEvent{Action: models.SCIMResourceAction(row.ResourceType, change), Traits: traits}
 }

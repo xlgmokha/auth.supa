@@ -12,7 +12,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/supabase-community/scim-go/pkg/core"
-	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase-community/scim-go/pkg/server"
 	"github.com/supabase/auth/internal/conf"
@@ -34,10 +33,8 @@ type Server struct {
 	db      *storage.Connection
 	config  *conf.GlobalConfiguration
 	baseURL string
-	limits  protocol.Limits
 	types   map[string]*resourceType
 	handler http.Handler
-	now     func() time.Time
 }
 
 // NewServer builds the SCIM server.
@@ -46,9 +43,7 @@ func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) *Server
 		db:      db,
 		config:  config,
 		baseURL: BaseURL(config),
-		limits:  protocol.DefaultLimits,
 		types:   map[string]*resourceType{},
-		now:     time.Now,
 	}
 
 	userAttributes := core.UserAttributes()
@@ -125,19 +120,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authorize admits a request whose bearer token resolved to a usable
-// credential, scoping it to that credential's directory. A token that is
-// unknown, revoked or expired is invalid; a directory that is disabled, or
-// whose SSO provider is, refuses every request.
+// credential, scoping it to that credential's directory. A request without
+// one is unauthorized; a directory that is disabled, or whose SSO provider
+// is, refuses every request.
 func (s *Server) authorize(ctx context.Context, _ string) (context.Context, error) {
 	credential := credentialFrom(ctx)
-	now := s.now()
-	if credential == nil || !credential.IsUsable(now) {
+	if credential == nil {
 		return ctx, server.ErrInvalidToken
 	}
 	if credential.ProviderDisabled || !credential.DirectoryEnabled {
 		return ctx, scimerrors.ErrForbidden("SCIM provisioning is disabled for this SSO provider")
 	}
-	if err := credential.Touch(s.db.WithContext(ctx), now); err != nil {
+	if err := credential.Touch(s.db.WithContext(ctx), time.Now()); err != nil {
 		logrus.WithError(err).Warn("could not record SCIM token use")
 	}
 	return withTenant(ctx, &Tenant{

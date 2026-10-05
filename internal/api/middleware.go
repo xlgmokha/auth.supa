@@ -73,11 +73,36 @@ func (f *FunctionHooks) UnmarshalJSON(b []byte) error {
 var emailRateLimitCounter = observability.ObtainMetricCounter("gotrue_email_rate_limit_counter", "Number of times an email rate limit has been triggered")
 
 func (a *API) performRateLimitingWithHeader(lmt *limiter.Limiter, req *http.Request) error {
+	key, ok := a.rateLimitHeaderKey(req)
+	if !ok {
+		return nil
+	}
+
+	// Apply rate limiting based on the first rate limit header value
+	if err := tollbooth.LimitByKeys(lmt, []string{key}); err != nil {
+		return apierrors.NewTooManyRequestsError(apierrors.ErrorCodeOverRequestRateLimit, "Request rate limit reached")
+	}
+
+	return nil
+}
+
+// rateLimitKey is the client a request is rate limited as: its trusted
+// forwarded address, else the first value of the rate limit header. It
+// reports false when neither is available.
+func (a *API) rateLimitKey(req *http.Request) (string, bool) {
+	if sbffAddr, ok := sbff.GetIPAddress(req); ok {
+		return sbffAddr, true
+	}
+	return a.rateLimitHeaderKey(req)
+}
+
+// rateLimitHeaderKey is the first value of the rate limit header, if set.
+func (a *API) rateLimitHeaderKey(req *http.Request) (string, bool) {
 	limitHeader := a.config.RateLimitHeader
 
 	// If no rate limit header was set, ignore rate limiting
 	if limitHeader == "" {
-		return nil
+		return "", false
 	}
 
 	valuesStr := req.Header.Get(limitHeader)
@@ -87,7 +112,7 @@ func (a *API) performRateLimitingWithHeader(lmt *limiter.Limiter, req *http.Requ
 		log := observability.GetLogEntry(req).Entry
 		log.WithField("header", limitHeader).Warn("request does not have a value for the rate limiting header, rate limiting is not applied")
 
-		return nil
+		return "", false
 	}
 
 	// According to RFC 7230 section 3.2.2, multiple headers with the same name are equivalent
@@ -112,27 +137,21 @@ func (a *API) performRateLimitingWithHeader(lmt *limiter.Limiter, req *http.Requ
 		log := observability.GetLogEntry(req).Entry
 		log.WithField("header", limitHeader).Warn("first rate limit header value is empty, rate limiting is not applied")
 
-		return nil
+		return "", false
 	}
 
-	// Otherwise, apply rate limiting based on the first rate limit header value
-	if err := tollbooth.LimitByKeys(lmt, []string{key}); err != nil {
-		return apierrors.NewTooManyRequestsError(apierrors.ErrorCodeOverRequestRateLimit, "Request rate limit reached")
-	}
-
-	return nil
+	return key, true
 }
 
 func (a *API) performRateLimiting(lmt *limiter.Limiter, req *http.Request) error {
-	if sbffAddr, ok := sbff.GetIPAddress(req); ok {
-		if err := tollbooth.LimitByKeys(lmt, []string{sbffAddr}); err != nil {
-			return apierrors.NewTooManyRequestsError(apierrors.ErrorCodeOverRequestRateLimit, "Request rate limit reached")
-		}
-
+	key, ok := a.rateLimitKey(req)
+	if !ok {
 		return nil
 	}
-
-	return a.performRateLimitingWithHeader(lmt, req)
+	if err := tollbooth.LimitByKeys(lmt, []string{key}); err != nil {
+		return apierrors.NewTooManyRequestsError(apierrors.ErrorCodeOverRequestRateLimit, "Request rate limit reached")
+	}
+	return nil
 }
 
 func (a *API) limitHandler(lmt *limiter.Limiter) middlewareHandler {
@@ -450,20 +469,20 @@ func (a *API) requireSCIMEnabled(w http.ResponseWriter, req *http.Request) (cont
 func (a *API) scimAuthenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var credential *models.SCIMCredential
-		if token := scimBearerToken(r); token != "" {
-			found, err := models.FindSCIMCredential(a.db.WithContext(r.Context()), token)
+		if matches := bearerRegexp.FindStringSubmatch(r.Header.Get("Authorization")); len(matches) == 2 {
+			found, err := models.FindSCIMCredential(a.db.WithContext(r.Context()), matches[1])
 			switch {
-			case err == nil:
+			case err == nil && found.IsUsable(a.Now()):
 				credential = found
-			case !models.IsNotFoundError(err):
+			case err != nil && !models.IsNotFoundError(err):
 				observability.GetLogEntry(r).Entry.WithError(err).Error("could not resolve SCIM token")
 				_ = scimprotocol.SendError(w, scimerrors.ErrInternal("Internal server error"))
 				return
 			}
 		}
 
-		limiter, key := a.limiterOpts.SCIMIP, scimClientIP(r, a.config.RateLimitHeader)
-		if credential != nil && credential.IsUsable(a.Now()) {
+		limiter, key := a.limiterOpts.SCIMIP, a.scimClientIP(r)
+		if credential != nil {
 			limiter, key = a.limiterOpts.SCIMDirectory, credential.DirectoryID.String()
 		}
 		if err := tollbooth.LimitByKeys(limiter, []string{key}); err != nil {
@@ -475,24 +494,12 @@ func (a *API) scimAuthenticate(next http.Handler) http.Handler {
 	})
 }
 
-func scimBearerToken(r *http.Request) string {
-	scheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
-	if !strings.EqualFold(scheme, "Bearer") {
-		return ""
-	}
-	return strings.TrimSpace(token)
-}
-
 // scimClientIP is the address unresolved SCIM requests are rate limited by:
-// the trusted forwarded address when there is one, else the remote address.
-func scimClientIP(r *http.Request, rateLimitHeader string) string {
-	if addr, ok := sbff.GetIPAddress(r); ok {
-		return addr
-	}
-	if rateLimitHeader != "" {
-		if value, _, _ := strings.Cut(r.Header.Get(rateLimitHeader), ","); strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
+// the key every other rate limit uses when there is one, else the remote
+// address.
+func (a *API) scimClientIP(r *http.Request) string {
+	if key, ok := a.rateLimitKey(r); ok {
+		return key
 	}
 	return utilities.GetIPAddress(r)
 }

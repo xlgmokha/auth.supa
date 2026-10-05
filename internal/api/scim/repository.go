@@ -93,6 +93,20 @@ func (t *resourceType) derivedAttribute(attribute string) *derived {
 	return nil
 }
 
+// find returns a live resource of the type in the tenant's directory.
+func (t *resourceType) find(tx *storage.Connection, tenant *Tenant, id string, forUpdate bool) (*models.SCIMResource, error) {
+	notFound := scimerrors.ErrNotFound("Resource " + strconv.Quote(id) + " not found")
+	resourceID, err := uuid.FromString(id)
+	if err != nil {
+		return nil, notFound
+	}
+	row, err := models.FindSCIMResource(tx, tenant.DirectoryID, t.name, resourceID, forUpdate)
+	if models.IsNotFoundError(err) {
+		return nil, notFound
+	}
+	return row, err
+}
+
 func (t *resourceType) key(attribute string) *key {
 	for i := range t.keys {
 		if strings.EqualFold(t.keys[i].attribute, attribute) {
@@ -115,15 +129,11 @@ func (r *repository[T]) Read(ctx context.Context, id string) (T, error) {
 		return zero, err
 	}
 	db := r.server.db.WithContext(ctx)
-	row, err := r.find(db, tenant, id, false)
+	row, err := r.kind.find(db, tenant, id, false)
 	if err != nil {
 		return zero, err
 	}
-	items, err := r.present(ctx, db, tenant, []*models.SCIMResource{row})
-	if err != nil {
-		return zero, err
-	}
-	return items[0], nil
+	return r.presentOne(ctx, db, tenant, row)
 }
 
 func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest) ([]T, int, error) {
@@ -144,15 +154,15 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 	}
 
 	db := r.server.db.WithContext(ctx)
-	page, err := models.ListSCIMResources(db, tenant.DirectoryID, r.kind.name, where.sql, where.args, order.sql, order.args, query.Offset(), query.Count)
+	rows, total, err := models.ListSCIMResources(db, tenant.DirectoryID, r.kind.name, where.sql, where.args, order.sql, order.args, query.Offset(), query.Count)
 	if err != nil {
 		return nil, 0, err
 	}
-	items, err := r.present(ctx, db, tenant, page.Resources)
+	items, err := r.present(ctx, db, tenant, rows)
 	if err != nil {
 		return nil, 0, err
 	}
-	return items, page.Total, nil
+	return items, total, nil
 }
 
 func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
@@ -178,18 +188,14 @@ func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 		if err := r.kind.hooks.afterCreate(tx, tenant, row); err != nil {
 			return err
 		}
-		if _, err := r.server.syncReferences(tx, tenant, r.kind, row, wanted, nil); err != nil {
+		if err := r.server.syncReferences(tx, tenant, r.kind, row, wanted, nil); err != nil {
 			return err
 		}
-		if err := r.server.audit(tx, tenant, models.SCIMResourceAction(r.kind.name, "created"), resourceTraits(row)); err != nil {
+		if err := r.server.audit(tx, tenant, resourceEvent(row, "created")); err != nil {
 			return err
 		}
-		items, err := r.present(ctx, tx, tenant, []*models.SCIMResource{row})
-		if err != nil {
-			return err
-		}
-		created = items[0]
-		return nil
+		created, err = r.presentOne(ctx, tx, tenant, row)
+		return err
 	})
 	return created, scimError(err)
 }
@@ -209,15 +215,15 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 		if err := r.server.lockNesting(tx, tenant, r.kind, wanted); err != nil {
 			return err
 		}
-		row, err := r.find(tx, tenant, common.ID, true)
+		row, err := r.kind.find(tx, tenant, common.ID, true)
 		if err != nil {
 			return err
 		}
-		if common.Meta.Version != "" && common.Meta.Version != etag(row.Version) {
-			return scimerrors.ErrPreconditionFailed("resource has changed on the server")
+		if err := checkVersion(common.Meta.Version, row); err != nil {
+			return err
 		}
 		before := *row
-		current, err := r.server.currentReferences(tx, r.kind, row)
+		current, err := currentReferences(tx, r.kind, row)
 		if err != nil {
 			return err
 		}
@@ -226,24 +232,22 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 		if err := row.Save(tx); err != nil {
 			return err
 		}
-		if err := row.ReplaceKeys(tx, r.keysOf(document)); err != nil {
-			return err
+		if keys := r.keysOf(document); !slices.Equal(keys, r.keysOf(core.Object(before.Resource))) {
+			if err := row.ReplaceKeys(tx, keys); err != nil {
+				return err
+			}
 		}
-		if _, err := r.server.syncReferences(tx, tenant, r.kind, row, wanted, current); err != nil {
+		if err := r.server.syncReferences(tx, tenant, r.kind, row, wanted, current); err != nil {
 			return err
 		}
 		if err := r.kind.hooks.afterUpdate(tx, tenant, &before, row); err != nil {
 			return err
 		}
-		if err := r.server.audit(tx, tenant, models.SCIMResourceAction(r.kind.name, "updated"), resourceTraits(row)); err != nil {
+		if err := r.server.audit(tx, tenant, resourceEvent(row, "updated")); err != nil {
 			return err
 		}
-		items, err := r.present(ctx, tx, tenant, []*models.SCIMResource{row})
-		if err != nil {
-			return err
-		}
-		updated = items[0]
-		return nil
+		updated, err = r.presentOne(ctx, tx, tenant, row)
+		return err
 	})
 	return updated, scimError(err)
 }
@@ -255,12 +259,12 @@ func (r *repository[T]) Delete(ctx context.Context, item T) error {
 	}
 	common := item.Common()
 	err = r.server.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
-		row, err := r.find(tx, tenant, common.ID, true)
+		row, err := r.kind.find(tx, tenant, common.ID, true)
 		if err != nil {
 			return err
 		}
-		if common.Meta.Version != "" && common.Meta.Version != etag(row.Version) {
-			return scimerrors.ErrPreconditionFailed("resource has changed on the server")
+		if err := checkVersion(common.Meta.Version, row); err != nil {
+			return err
 		}
 		removed, err := row.Tombstone(tx)
 		if err != nil {
@@ -269,39 +273,17 @@ func (r *repository[T]) Delete(ctx context.Context, item T) error {
 		if err := r.kind.hooks.afterDelete(tx, tenant, row); err != nil {
 			return err
 		}
-		if err := r.server.audit(tx, tenant, models.SCIMResourceAction(r.kind.name, "deleted"), resourceTraits(row)); err != nil {
-			return err
-		}
 		// Losing a member is a membership change of the referencing resource.
-		for _, ref := range removed {
-			if ref.TargetID != row.ID {
-				continue
-			}
-			if err := r.server.auditReferenceChange(tx, tenant, ref.SourceID, ref.Attribute, row.ID, false); err != nil {
-				return err
-			}
-		}
-		return nil
+		events := append([]models.SCIMAuditEvent{resourceEvent(row, "deleted")}, r.server.referrerEvents(row.ID, removed)...)
+		return r.server.audit(tx, tenant, events...)
 	})
 	return scimError(err)
 }
 
-func (r *repository[T]) find(tx *storage.Connection, tenant *Tenant, id string, forUpdate bool) (*models.SCIMResource, error) {
-	resourceID, err := uuid.FromString(id)
-	if err != nil {
-		return nil, scimerrors.ErrNotFound("Resource " + strconv.Quote(id) + " not found")
-	}
-	row, err := models.FindSCIMResource(tx, tenant.DirectoryID, r.kind.name, resourceID, forUpdate)
-	if models.IsNotFoundError(err) {
-		return nil, scimerrors.ErrNotFound("Resource " + strconv.Quote(id) + " not found")
-	}
-	return row, err
-}
-
-// encode turns a resource into the document stored for it and the ids it
-// references. id, meta, writeOnly attributes and derived attributes are never
-// stored.
-func (r *repository[T]) encode(item T) (core.Object, map[string][]string, error) {
+// encode turns a resource into the document stored for it and the distinct
+// ids it references. id, meta, writeOnly attributes and derived attributes
+// are never stored.
+func (r *repository[T]) encode(item T) (core.Object, map[string][]uuid.UUID, error) {
 	document, err := core.NewObject(item)
 	if err != nil {
 		return nil, nil, scimerrors.ErrInternal("could not encode the resource")
@@ -316,7 +298,7 @@ func (r *repository[T]) encode(item T) (core.Object, map[string][]string, error)
 	for _, d := range r.kind.derived {
 		document.Remove(d.attribute)
 	}
-	wanted := map[string][]string{}
+	wanted := map[string][]uuid.UUID{}
 	for _, ref := range r.kind.references {
 		values := []string{}
 		elements, _ := document.Get(ref.attribute).([]any)
@@ -327,7 +309,11 @@ func (r *repository[T]) encode(item T) (core.Object, map[string][]string, error)
 				}
 			}
 		}
-		wanted[ref.attribute] = values
+		ids, err := uniqueIDs(values)
+		if err != nil {
+			return nil, nil, err
+		}
+		wanted[ref.attribute] = ids
 		document.Remove(ref.attribute)
 	}
 	return document, wanted, nil
@@ -349,6 +335,15 @@ func (r *repository[T]) keysOf(document core.Object) []models.SCIMResourceKey {
 	return keys
 }
 
+func (r *repository[T]) presentOne(ctx context.Context, tx *storage.Connection, tenant *Tenant, row *models.SCIMResource) (T, error) {
+	items, err := r.present(ctx, tx, tenant, []*models.SCIMResource{row})
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return items[0], nil
+}
+
 // present turns stored rows into resources, adding id, meta, references and
 // derived attributes. References and derived attributes are skipped when the
 // response projection excludes them.
@@ -359,9 +354,11 @@ func (r *repository[T]) present(ctx context.Context, tx *storage.Connection, ten
 	}
 	projection := protocol.ProjectionFrom(ctx)
 	ids := make([]uuid.UUID, len(rows))
+	index := make(map[uuid.UUID]int, len(rows))
 	documents := make([]map[string]any, len(rows))
 	for i, row := range rows {
 		ids[i] = row.ID
+		index[row.ID] = i
 		documents[i] = maps.Clone(map[string]any(row.Resource))
 		documents[i]["id"] = row.ID.String()
 		documents[i]["meta"] = map[string]any{
@@ -373,10 +370,6 @@ func (r *repository[T]) present(ctx context.Context, tx *storage.Connection, ten
 		}
 	}
 
-	index := map[uuid.UUID]int{}
-	for i, id := range ids {
-		index[id] = i
-	}
 	for _, ref := range r.kind.references {
 		if !projection.Returns(ref.attribute) {
 			continue
@@ -428,17 +421,6 @@ func requireTenant(ctx context.Context) (*Tenant, error) {
 	return tenant, nil
 }
 
-func resourceTraits(row *models.SCIMResource) map[string]any {
-	traits := map[string]any{
-		"resource_id":   row.ID,
-		"resource_type": row.ResourceType,
-	}
-	if row.UserID != nil {
-		traits["user_id"] = *row.UserID
-	}
-	return traits
-}
-
 // fold normalises a string value the way SCIM compares it: case-insensitively
 // unless the attribute is caseExact, per RFC 7643 Section 2.3.1.
 func fold(attribute *core.Attribute, value string) string {
@@ -450,6 +432,15 @@ func fold(attribute *core.Attribute, value string) string {
 
 func etag(version int64) string {
 	return `W/"` + strconv.FormatInt(version, 10) + `"`
+}
+
+// checkVersion refuses a write made against a version of row other than its
+// current one. An empty or "*" version matches any.
+func checkVersion(version string, row *models.SCIMResource) error {
+	if version != "" && version != "*" && version != etag(row.Version) {
+		return scimerrors.ErrPreconditionFailed("resource has changed on the server")
+	}
+	return nil
 }
 
 // scimError maps storage errors onto SCIM errors; anything else is a 500.
@@ -471,12 +462,14 @@ func scimError(err error) error {
 
 func uniqueIDs(values []string) ([]uuid.UUID, error) {
 	ids := []uuid.UUID{}
+	seen := make(map[uuid.UUID]struct{}, len(values))
 	for _, value := range values {
 		id, err := uuid.FromString(value)
 		if err != nil {
 			return nil, scimerrors.ErrInvalidValue(strconv.Quote(value) + " is not a resource in this directory")
 		}
-		if !slices.Contains(ids, id) {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
 			ids = append(ids, id)
 		}
 	}

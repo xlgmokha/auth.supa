@@ -22,7 +22,7 @@ type userHooks struct {
 func (h userHooks) afterCreate(tx *storage.Connection, tenant *Tenant, row *models.SCIMResource) error {
 	document := core.Object(row.Resource)
 	userName, _ := document.Get("userName").(string)
-	provider := "sso:" + tenant.SSOProviderID.String()
+	provider := tenant.identityProvider()
 
 	identity, err := models.FindIdentityByIdAndProvider(tx, userName, provider)
 	switch {
@@ -44,13 +44,11 @@ func (h userHooks) afterCreate(tx *storage.Connection, tenant *Tenant, row *mode
 	if err := user.SetRole(tx, h.config.JWT.DefaultGroupName); err != nil {
 		return err
 	}
+	identityData := map[string]interface{}{"sub": userName}
 	if email != "" {
 		if err := user.Confirm(tx); err != nil {
 			return err
 		}
-	}
-	identityData := map[string]interface{}{"sub": userName}
-	if email != "" {
 		identityData["email"] = email
 		identityData["email_verified"] = true
 	}
@@ -75,20 +73,19 @@ func (h userHooks) afterUpdate(tx *storage.Connection, tenant *Tenant, before, a
 	if err != nil {
 		return err
 	}
-	if email := emailOf(core.Object(after.Resource)); email != "" && !strings.EqualFold(email, user.GetEmail()) {
-		if err := user.SetEmail(tx, strings.ToLower(email)); err != nil {
+	if email := strings.ToLower(emailOf(core.Object(after.Resource))); email != "" && email != strings.ToLower(user.GetEmail()) {
+		if err := user.SetEmail(tx, email); err != nil {
 			return err
 		}
 		identities, err := models.FindIdentitiesByUserID(tx, user.ID)
 		if err != nil {
 			return err
 		}
-		provider := "sso:" + tenant.SSOProviderID.String()
 		for _, identity := range identities {
-			if identity.Provider != provider {
+			if identity.Provider != tenant.identityProvider() {
 				continue
 			}
-			if err := identity.UpdateIdentityData(tx, map[string]interface{}{"email": strings.ToLower(email)}); err != nil {
+			if err := identity.UpdateIdentityData(tx, map[string]interface{}{"email": email}); err != nil {
 				return err
 			}
 		}

@@ -45,7 +45,15 @@ type SCIMTokenResponse struct {
 func (a *API) adminSCIMGet(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	provider := getSSOProvider(ctx)
-	status, err := a.scimStatus(a.db.WithContext(ctx), provider)
+	db := a.db.WithContext(ctx)
+	directory, err := models.FindSCIMDirectoryBySSOProviderID(db, provider.ID)
+	switch {
+	case models.IsNotFoundError(err):
+		directory = nil
+	case err != nil:
+		return apierrors.NewInternalServerError("Database error finding SCIM directory").WithInternalError(err)
+	}
+	status, err := a.scimStatus(db, provider, directory)
 	if err != nil {
 		return err
 	}
@@ -84,7 +92,7 @@ func (a *API) adminSCIMUpdate(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		status, err = a.scimStatus(tx, provider)
+		status, err = a.scimStatus(tx, provider, directory)
 		return err
 	})
 	if err != nil {
@@ -163,16 +171,16 @@ func (a *API) adminSCIMTokenRevoke(w http.ResponseWriter, r *http.Request) error
 	return sendJSON(w, http.StatusOK, token)
 }
 
-func (a *API) scimStatus(tx *storage.Connection, provider *models.SSOProvider) (*SCIMStatus, error) {
+// scimStatus reports the provider's SCIM state; directory is nil for a
+// provider that never had one. Routes are only served while SCIM is enabled
+// for the project.
+func (a *API) scimStatus(tx *storage.Connection, provider *models.SSOProvider, directory *models.SCIMDirectory) (*SCIMStatus, error) {
 	status := &SCIMStatus{BaseURL: scim.BaseURL(a.config), Tokens: []*models.SCIMToken{}}
-	directory, err := models.FindSCIMDirectoryBySSOProviderID(tx, provider.ID)
-	switch {
-	case models.IsNotFoundError(err):
+	if directory == nil {
 		return status, nil
-	case err != nil:
-		return nil, apierrors.NewInternalServerError("Database error finding SCIM directory").WithInternalError(err)
 	}
-	status.Enabled = a.scimEnabled() && provider.IsEnabled() && directory.Enabled
+	status.Enabled = provider.IsEnabled() && directory.Enabled
+	var err error
 	if status.Tokens, err = models.FindActiveSCIMTokens(tx, directory.ID); err != nil {
 		return nil, apierrors.NewInternalServerError("Database error listing SCIM tokens").WithInternalError(err)
 	}

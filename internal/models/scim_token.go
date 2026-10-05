@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/gofrs/uuid"
@@ -134,8 +135,12 @@ type SCIMCredential struct {
 }
 
 // FindSCIMCredential resolves a plaintext bearer token. Revoked and expired
-// tokens are returned so the caller decides how to refuse them.
+// tokens are returned so the caller decides how to refuse them. A token that
+// could never have been issued is not found without a query.
 func FindSCIMCredential(tx *storage.Connection, plaintext string) (*SCIMCredential, error) {
+	if !isSCIMToken(plaintext) {
+		return nil, SCIMTokenNotFoundError{}
+	}
 	var credential SCIMCredential
 	if err := tx.RawQuery(
 		`select t.id as token_id, t.prefix, t.expires_at, t.revoked_at, t.last_used_at,
@@ -153,6 +158,16 @@ func FindSCIMCredential(tx *storage.Connection, plaintext string) (*SCIMCredenti
 		return nil, errors.Wrap(err, "error finding SCIM token")
 	}
 	return &credential, nil
+}
+
+// isSCIMToken reports whether plaintext has the shape NewSCIMToken issues.
+func isSCIMToken(plaintext string) bool {
+	entropy, ok := strings.CutPrefix(plaintext, scimTokenScheme)
+	if !ok || len(entropy) != 2*scimTokenEntropyBytes {
+		return false
+	}
+	_, err := hex.DecodeString(entropy)
+	return err == nil
 }
 
 // IsUsable reports whether the token is neither revoked nor expired at now.

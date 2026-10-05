@@ -13,8 +13,9 @@ type credentialKey struct{}
 type requestKey struct{}
 type tenantKey struct{}
 
-// WithCredential carries the credential the request's bearer token resolved
-// to, if any, before the SCIM server decides whether it may be used.
+// WithCredential carries the usable credential the request's bearer token
+// resolved to, if any, before the SCIM server decides whether its directory
+// may be served.
 func WithCredential(r *http.Request, credential *models.SCIMCredential) context.Context {
 	ctx := context.WithValue(r.Context(), requestKey{}, r)
 	if credential == nil {
@@ -48,6 +49,12 @@ func withTenant(ctx context.Context, tenant *Tenant) context.Context {
 func tenantFrom(ctx context.Context) *Tenant {
 	tenant, _ := ctx.Value(tenantKey{}).(*Tenant)
 	return tenant
+}
+
+// identityProvider is the provider of the identities the tenant's SSO
+// provider signs accounts in with.
+func (t *Tenant) identityProvider() string {
+	return "sso:" + t.SSOProviderID.String()
 }
 
 func (t *Tenant) ipAddress() string {

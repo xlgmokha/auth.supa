@@ -2,13 +2,12 @@ package models
 
 import (
 	"database/sql"
-	"errors"
 	"time"
 
 	"github.com/gofrs/uuid"
-	"github.com/jackc/pgconn"
 	pkgerrors "github.com/pkg/errors"
 	"github.com/supabase/auth/internal/storage"
+	"github.com/supabase/auth/internal/utilities"
 )
 
 // SCIMResource is one provisioned SCIM resource of any resource type. The
@@ -65,9 +64,11 @@ type SCIMResourceKey struct {
 }
 
 // SCIMReference is a directed reference from one resource to another, named
-// by the referencing attribute.
+// by the referencing attribute. Queries fill in the type of the end they do
+// not start from.
 type SCIMReference struct {
 	SourceID   uuid.UUID `db:"source_id"`
+	SourceType string    `db:"source_type"`
 	Attribute  string    `db:"attribute"`
 	TargetID   uuid.UUID `db:"target_id"`
 	TargetType string    `db:"target_type"`
@@ -99,7 +100,7 @@ func (r *SCIMResource) Insert(tx *storage.Connection) error {
 		values (?, ?, ?, ?, ?) returning *`,
 		r.ID, r.DirectoryID, r.ResourceType, r.UserID, r.Resource,
 	).First(r)
-	return scimWriteError(err, "error creating SCIM resource")
+	return pkgerrors.Wrap(err, "error creating SCIM resource")
 }
 
 // Save writes the document and bumps the version.
@@ -109,15 +110,19 @@ func (r *SCIMResource) Save(tx *storage.Connection) error {
 		where id = ? returning *`,
 		r.Resource, r.ID,
 	).First(r)
-	return scimWriteError(err, "error updating SCIM resource")
+	return pkgerrors.Wrap(err, "error updating SCIM resource")
 }
 
-// SetUserID links the resource to the account it provisions.
+// SetUserID links the resource to the account it provisions. An account has
+// at most one live resource per directory.
 func (r *SCIMResource) SetUserID(tx *storage.Connection, userID uuid.UUID) error {
 	err := tx.RawQuery(
 		"update scim_resources set user_id = ? where id = ? returning *", userID, r.ID,
 	).First(r)
-	return scimWriteError(err, "error linking SCIM resource")
+	if isUniqueViolation(err) {
+		return SCIMUniquenessError{Attribute: "account"}
+	}
+	return pkgerrors.Wrap(err, "error linking SCIM resource")
 }
 
 // Touch bumps the version of a resource whose references changed.
@@ -125,11 +130,12 @@ func (r *SCIMResource) Touch(tx *storage.Connection) error {
 	err := tx.RawQuery(
 		"update scim_resources set version = version + 1, updated_at = now() where id = ? returning *", r.ID,
 	).First(r)
-	return scimWriteError(err, "error updating SCIM resource")
+	return pkgerrors.Wrap(err, "error updating SCIM resource")
 }
 
 // Tombstone soft-deletes the resource. Its keys and references are removed so
-// its unique values can be provisioned again; the row stays for support.
+// its unique values can be provisioned again; the row stays for support. It
+// returns the references other resources made to it, with their source type.
 func (r *SCIMResource) Tombstone(tx *storage.Connection) ([]SCIMReference, error) {
 	if err := tx.RawQuery(
 		"update scim_resources set deleted_at = now(), updated_at = now() where id = ? returning *", r.ID,
@@ -141,9 +147,14 @@ func (r *SCIMResource) Tombstone(tx *storage.Connection) ([]SCIMReference, error
 	}
 	references := []SCIMReference{}
 	if err := tx.RawQuery(
-		`delete from scim_resource_references where source_id = ? or target_id = ?
-		returning source_id, attribute, target_id, '' as target_type`,
-		r.ID, r.ID,
+		`with removed as (
+			delete from scim_resource_references where source_id = ? or target_id = ?
+			returning source_id, attribute, target_id
+		)
+		select d.source_id, s.resource_type as source_type, d.attribute, d.target_id
+		from removed d join scim_resources s on s.id = d.source_id
+		where d.target_id = ?`,
+		r.ID, r.ID, r.ID,
 	).All(&references); err != nil {
 		return nil, pkgerrors.Wrap(err, "error deleting SCIM resource references")
 	}
@@ -169,27 +180,61 @@ func FindSCIMResource(tx *storage.Connection, directoryID uuid.UUID, resourceTyp
 }
 
 // FindSCIMResourcesByID returns the live resources of the directory among ids,
-// of any type, optionally locking them so they cannot be deleted concurrently.
-func FindSCIMResourcesByID(tx *storage.Connection, directoryID uuid.UUID, ids []uuid.UUID, lock bool) ([]*SCIMResource, error) {
+// of any type.
+func FindSCIMResourcesByID(tx *storage.Connection, directoryID uuid.UUID, ids []uuid.UUID) ([]*SCIMResource, error) {
 	resources := []*SCIMResource{}
 	if len(ids) == 0 {
 		return resources, nil
 	}
-	query := `select * from scim_resources
-		where directory_id = ? and id = any(?::uuid[]) and deleted_at is null order by id`
-	if lock {
-		query += " for share"
-	}
-	if err := tx.RawQuery(query, directoryID, uuidStrings(ids)).All(&resources); err != nil {
+	if err := tx.RawQuery(
+		"select * from scim_resources where directory_id = ? and id = any(?::uuid[]) and deleted_at is null order by id",
+		directoryID, uuidStrings(ids),
+	).All(&resources); err != nil {
 		return nil, pkgerrors.Wrap(err, "error finding SCIM resources")
 	}
 	return resources, nil
 }
 
-// SCIMResourcePage is one page of a resource listing.
-type SCIMResourcePage struct {
-	Resources []*SCIMResource
-	Total     int
+// LockSCIMResourceTypes returns the type of each live resource of the
+// directory among ids, locking them so none can be deleted before the
+// transaction ends.
+func LockSCIMResourceTypes(tx *storage.Connection, directoryID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	types := map[uuid.UUID]string{}
+	if len(ids) == 0 {
+		return types, nil
+	}
+	rows := []struct {
+		ID           uuid.UUID `db:"id"`
+		ResourceType string    `db:"resource_type"`
+	}{}
+	if err := tx.RawQuery(
+		`select id, resource_type from scim_resources
+		where directory_id = ? and id = any(?::uuid[]) and deleted_at is null order by id for share`,
+		directoryID, uuidStrings(ids),
+	).All(&rows); err != nil {
+		return nil, pkgerrors.Wrap(err, "error locking SCIM resources")
+	}
+	for _, row := range rows {
+		types[row.ID] = row.ResourceType
+	}
+	return types, nil
+}
+
+// AnySCIMResourceOfType reports whether any of ids is a live resource of the
+// type in the directory.
+func AnySCIMResourceOfType(tx *storage.Connection, directoryID uuid.UUID, resourceType string, ids []uuid.UUID) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	var found bool
+	if err := tx.RawQuery(
+		`select exists (select 1 from scim_resources
+		where directory_id = ? and resource_type = ? and id = any(?::uuid[]) and deleted_at is null)`,
+		directoryID, resourceType, uuidStrings(ids),
+	).First(&found); err != nil {
+		return false, pkgerrors.Wrap(err, "error finding SCIM resources")
+	}
+	return found, nil
 }
 
 type scimResourceRow struct {
@@ -200,39 +245,41 @@ type scimResourceRow struct {
 // ListSCIMResources returns the live resources of the type in the directory
 // matching where, ordered by orderBy. where and orderBy are SQL over the
 // scim_resources alias r; their values are bound through args.
-func ListSCIMResources(tx *storage.Connection, directoryID uuid.UUID, resourceType, where string, whereArgs []any, orderBy string, orderArgs []any, offset, limit int) (*SCIMResourcePage, error) {
+func ListSCIMResources(tx *storage.Connection, directoryID uuid.UUID, resourceType, where string, whereArgs []any, orderBy string, orderArgs []any, offset, limit int) ([]*SCIMResource, int, error) {
 	from := " from scim_resources r where r.directory_id = ? and r.resource_type = ? and r.deleted_at is null"
 	filterArgs := append([]any{directoryID, resourceType}, whereArgs...)
 	if where != "" {
 		from += " and (" + where + ")"
 	}
 
-	page := &SCIMResourcePage{Resources: []*SCIMResource{}}
-	count := func() error {
-		if err := tx.RawQuery("select count(*)"+from, filterArgs...).First(&page.Total); err != nil {
-			return pkgerrors.Wrap(err, "error counting SCIM resources")
+	resources := []*SCIMResource{}
+	count := func() ([]*SCIMResource, int, error) {
+		var total int
+		if err := tx.RawQuery("select count(*)"+from, filterArgs...).First(&total); err != nil {
+			return nil, 0, pkgerrors.Wrap(err, "error counting SCIM resources")
 		}
-		return nil
+		return resources, total, nil
 	}
 	if limit == 0 {
-		return page, count()
+		return count()
 	}
 
 	rows := []scimResourceRow{}
 	query := "select r.*, count(*) over () as total" + from + " order by " + orderBy + " limit ? offset ?"
 	args := append(append(append([]any{}, filterArgs...), orderArgs...), limit, offset)
 	if err := tx.RawQuery(query, args...).All(&rows); err != nil {
-		return nil, pkgerrors.Wrap(err, "error listing SCIM resources")
+		return nil, 0, pkgerrors.Wrap(err, "error listing SCIM resources")
 	}
 	if len(rows) == 0 && offset > 0 {
 		// A page past the last row carries no window count.
-		return page, count()
+		return count()
 	}
+	total := 0
 	for i := range rows {
-		page.Resources = append(page.Resources, &rows[i].SCIMResource)
-		page.Total = rows[i].Total
+		resources = append(resources, &rows[i].SCIMResource)
+		total = rows[i].Total
 	}
-	return page, nil
+	return resources, total, nil
 }
 
 // ReplaceKeys makes keys the resource's complete set of keys.
@@ -292,6 +339,18 @@ func (r *SCIMResource) RemoveReferences(tx *storage.Connection, attribute string
 	return removed, nil
 }
 
+// ReferencedIDs returns the ids the resource references through
+// attribute.
+func (r *SCIMResource) ReferencedIDs(tx *storage.Connection, attribute string) ([]uuid.UUID, error) {
+	ids := []uuid.UUID{}
+	if err := tx.RawQuery(
+		"select target_id from scim_resource_references where source_id = ? and attribute = ?", r.ID, attribute,
+	).All(&ids); err != nil {
+		return nil, pkgerrors.Wrap(err, "error finding SCIM resource references")
+	}
+	return ids, nil
+}
+
 // FindSCIMReferenceTargets returns the references made through attribute by
 // any of sources.
 func FindSCIMReferenceTargets(tx *storage.Connection, sources []uuid.UUID, attribute string) ([]SCIMReference, error) {
@@ -345,17 +404,6 @@ func uuidStrings(ids []uuid.UUID) []string {
 }
 
 func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func scimWriteError(err error, message string) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "scim_resources_directory_user_id_key" {
-		return SCIMUniquenessError{Attribute: "account"}
-	}
-	if err != nil {
-		return pkgerrors.Wrap(err, message)
-	}
-	return nil
+	pgErr := utilities.NewPostgresError(err)
+	return pgErr != nil && pgErr.IsUniqueConstraintViolated()
 }
