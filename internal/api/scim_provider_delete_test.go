@@ -51,7 +51,6 @@ func (ts *SCIMTestSuite) TestProviderDeleteCascadesSCIMRows() {
 	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.A.ID))
 	require.Zero(ts.T(), ts.countRows(&models.SCIMGroup{}, "sso_provider_id = ?", ts.A.ID))
 	require.Zero(ts.T(), ts.countRows(&models.SCIMToken{}, "sso_provider_id = ?", ts.A.ID))
-	require.Zero(ts.T(), ts.countRows(&models.SCIMGroupMember{}, "1 = 1"))
 	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.B.ID))
 	w, _ := ts.do(ts.TokenB, http.MethodGet, "/Users", "")
 	require.Equal(ts.T(), http.StatusOK, w.Code)

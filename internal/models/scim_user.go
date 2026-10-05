@@ -28,12 +28,15 @@ func (SCIMUser) TableName() string {
 }
 
 var scimUsersTable = scimTable{
-	tableName:  SCIMUser{}.TableName(),
-	label:      "SCIM user",
-	columns:    "id, sso_provider_id, resource, user_name, external_id, active, created_at, updated_at, deleted_at",
-	nameColumn: "user_name",
-	scope:      "sso_provider_id = ? AND deleted_at IS NULL",
-	conflict:   ErrSCIMUserConflict,
+	tableName:      SCIMUser{}.TableName(),
+	label:          "SCIM user",
+	columns:        "id, sso_provider_id, resource, user_name, external_id, active, created_at, updated_at, deleted_at",
+	nameColumn:     "user_name",
+	externalColumn: "external_id",
+	stored:         "resource",
+	written:        "?::jsonb",
+	scope:          "sso_provider_id = ? AND deleted_at IS NULL",
+	conflict:       ErrSCIMUserConflict,
 }
 
 func CreateSCIMUser(tx *storage.Connection, providerID uuid.UUID, resource []byte) (*SCIMUser, error) {

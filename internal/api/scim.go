@@ -494,13 +494,10 @@ func (s *scimGroupRepository) save(ctx context.Context, group *core.Group, write
 		if row, action, terr = write(tx, resource); terr != nil {
 			return terr
 		}
-		switch {
-		case !tracked:
-			row, change, terr = models.ReplaceSCIMGroupMembers(tx, row, members)
-		case action == "" && scimVersion(row.UpdatedAt) != snapshot.version && s.mergeable(ctx, version):
-			row, change, terr = models.MergeSCIMGroupMembers(tx, row, snapshot.members, members)
-		default:
+		if tracked {
 			row, change, terr = models.ReplaceSCIMGroupMembersFrom(tx, row, snapshot.members, members)
+		} else {
+			row, change, terr = models.ReplaceSCIMGroupMembers(tx, row, members)
 		}
 		if terr != nil {
 			return terr

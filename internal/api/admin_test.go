@@ -889,11 +889,9 @@ func (ts *AdminTestSuite) TestAdminUserDeleteSoftDeletesSCIMUser() {
 			require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", scimUser.ID).First(&row))
 			require.NotNil(ts.T(), row.DeletedAt)
 
-			members, err := ts.API.db.Q().Where("scim_user_id = ?", scimUser.ID).Count(&models.SCIMGroupMember{})
-			require.NoError(ts.T(), err)
-			require.Zero(ts.T(), members)
 			updated, err := models.FindSCIMGroup(ts.API.db, scimUser.SSOProviderID, group.ID)
 			require.NoError(ts.T(), err)
+			require.NotContains(ts.T(), string(updated.Resource), scimUser.ID.String())
 			require.True(ts.T(), updated.UpdatedAt.After(group.UpdatedAt))
 
 			deleted := queryAuditEntries(ts.T(), ts.API.db, "payload->>'action' = ? AND payload->'traits'->>'scim_user_id' = ?", models.SCIMUserDeletedAction, scimUser.ID.String())

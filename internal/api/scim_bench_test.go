@@ -156,13 +156,9 @@ func (s *scimBench) seedGroup(b *testing.B, members []uuid.UUID) string {
 		ID uuid.UUID `db:"id"`
 	}
 	require.NoError(b, s.api.db.RawQuery(
-		`INSERT INTO scim_groups (id, sso_provider_id, resource) VALUES (gen_random_uuid(), ?, '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"displayName":"Engineering"}'::jsonb) RETURNING id`,
-		s.provider,
+		`INSERT INTO scim_resources (id, sso_provider_id, resource_type, resource) SELECT gen_random_uuid(), ?, 'Group', '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"displayName":"Engineering"}'::jsonb || jsonb_build_object('members', coalesce(jsonb_agg(jsonb_build_object('value', m, 'type', 'User') ORDER BY m), '[]'::jsonb)) FROM unnest(?::text[]) m RETURNING id`,
+		s.provider, uuidStrings(members),
 	).First(&row))
-	require.NoError(b, s.api.db.RawQuery(
-		`INSERT INTO scim_group_members (group_id, scim_user_id) SELECT ?, unnest(?::uuid[])`,
-		row.ID, members,
-	).Exec())
 	return row.ID.String()
 }
 
@@ -185,4 +181,12 @@ func (s *scimBench) expect(b *testing.B, status int, method, path, body string) 
 	}
 	b.ReportMetric(float64(w.Body.Len()), "resp-bytes")
 	return w
+}
+
+func uuidStrings(ids []uuid.UUID) []string {
+	values := make([]string, len(ids))
+	for i, id := range ids {
+		values[i] = id.String()
+	}
+	return values
 }

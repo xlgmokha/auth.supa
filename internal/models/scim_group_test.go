@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -33,8 +34,8 @@ func (ts *SCIMGroupTestSuite) TestCreate() {
 	require.NoError(ts.T(), err)
 
 	require.Equal(ts.T(), ts.provider.ID, group.SSOProviderID)
-	require.Equal(ts.T(), "engineering", group.DisplayName)
-	require.Equal(ts.T(), "ext-1", *group.ExternalID)
+	require.Equal(ts.T(), "Group", group.ResourceType)
+	require.Equal(ts.T(), "ext-1", ts.attribute(group, "externalId"))
 	require.JSONEq(ts.T(), `{"displayName":"Engineering","externalId":"ext-1"}`, string(group.Resource))
 	require.False(ts.T(), group.CreatedAt.IsZero())
 
@@ -65,13 +66,13 @@ func (ts *SCIMGroupTestSuite) TestFindGroupsFiltersAndSorts() {
 	groups, total, err := FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{Filter: SCIMFilter{Attribute: SCIMAttributeName, Value: "ALPHA"}, Limit: 10})
 	require.NoError(ts.T(), err)
 	require.Equal(ts.T(), 1, total)
-	require.Equal(ts.T(), "alpha", groups[0].DisplayName)
+	require.Equal(ts.T(), "alpha", ts.attribute(&groups[0], "displayName"))
 
 	groups, total, err = FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{Order: SCIMOrder{By: SCIMSortByName, Descending: true}, Limit: 10})
 	require.NoError(ts.T(), err)
 	require.Equal(ts.T(), 2, total)
-	require.Equal(ts.T(), "beta", groups[0].DisplayName)
-	require.Equal(ts.T(), "alpha", groups[1].DisplayName)
+	require.Equal(ts.T(), "Beta", ts.attribute(&groups[0], "displayName"))
+	require.Equal(ts.T(), "alpha", ts.attribute(&groups[1], "displayName"))
 
 	groups, total, err = FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{})
 	require.NoError(ts.T(), err)
@@ -85,7 +86,7 @@ func (ts *SCIMGroupTestSuite) TestReplaceChecksVersion() {
 	replaced, changed, err := ReplaceSCIMGroupIfChanged(ts.db, SCIMTarget{ProviderID: ts.provider.ID, ID: group.ID, UpdatedAt: &group.UpdatedAt}, []byte(`{"displayName":"Platform"}`))
 	require.NoError(ts.T(), err)
 	require.True(ts.T(), changed)
-	require.Equal(ts.T(), "platform", replaced.DisplayName)
+	require.Equal(ts.T(), "Platform", ts.attribute(replaced, "displayName"))
 
 	_, _, err = ReplaceSCIMGroupIfChanged(ts.db, SCIMTarget{ProviderID: ts.provider.ID, ID: group.ID, UpdatedAt: &group.UpdatedAt}, []byte(`{"displayName":"Stale"}`))
 	require.ErrorIs(ts.T(), err, ErrSCIMStale)
@@ -292,4 +293,10 @@ func (ts *SCIMGroupTestSuite) members(group *SCIMGroup) []uuid.UUID {
 		ids[i] = m.SCIMUserID
 	}
 	return ids
+}
+
+func (ts *SCIMGroupTestSuite) attribute(group *SCIMGroup, name string) any {
+	var resource map[string]any
+	require.NoError(ts.T(), json.Unmarshal(group.Resource, &resource))
+	return resource[name]
 }

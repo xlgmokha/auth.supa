@@ -67,12 +67,16 @@ type SCIMTarget struct {
 }
 
 type scimTable struct {
-	tableName  string
-	label      string
-	columns    string
-	nameColumn string
-	scope      string
-	conflict   error
+	tableName      string
+	resourceType   string
+	label          string
+	columns        string
+	nameColumn     string
+	externalColumn string
+	stored         string
+	written        string
+	scope          string
+	conflict       error
 }
 
 func (t scimTable) where(providerID uuid.UUID, filter SCIMFilter) (string, []any, error) {
@@ -90,7 +94,7 @@ func (t scimTable) filter(filter SCIMFilter) (string, []any, error) {
 	case filter.Attribute == SCIMAttributeName:
 		return t.nameColumn + ` COLLATE "C" = lower(?)`, []any{filter.Value}, nil
 	case filter.Attribute == SCIMAttributeExternalID:
-		return `external_id COLLATE "C" = ?`, []any{filter.Value}, nil
+		return t.externalColumn + ` COLLATE "C" = ?`, []any{filter.Value}, nil
 	case filter.Attribute == SCIMAttributeActive && filter.Value == true:
 		return "active", nil, nil
 	case filter.Attribute == SCIMAttributeActive:
@@ -176,8 +180,8 @@ func findSCIMPage[T any](tx *storage.Connection, table scimTable, providerID uui
 			return rows, query.Offset + len(rows), nil
 		}
 	}
-	total, err := tx.Q().Where(where, args...).Count(new(T))
-	if err != nil {
+	var total int
+	if err := tx.RawQuery(fmt.Sprintf("SELECT count(*) FROM %q WHERE %s", table.tableName, where), args...).First(&total); err != nil {
 		return nil, 0, errors.Wrapf(err, "error counting %ss", table.label)
 	}
 	return rows, total, nil
@@ -185,10 +189,11 @@ func findSCIMPage[T any](tx *storage.Connection, table scimTable, providerID uui
 
 func createSCIMRow[T any](tx *storage.Connection, table scimTable, providerID uuid.UUID, resource []byte) (*T, error) {
 	row := new(T)
-	if err := tx.RawQuery(
-		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource) VALUES (?, ?, ?::jsonb) RETURNING %s", table.tableName, table.columns),
-		uuid.Must(uuid.NewV4()), providerID, string(resource),
-	).First(row); err != nil {
+	query, args := "INSERT INTO %q (id, sso_provider_id, resource) VALUES (?, ?, ?::jsonb) RETURNING %s", []any{uuid.Must(uuid.NewV4()), providerID, string(resource)}
+	if table.resourceType != "" {
+		query, args = "INSERT INTO %q (id, sso_provider_id, resource, resource_type) VALUES (?, ?, ?::jsonb, ?) RETURNING %s", append(args, table.resourceType)
+	}
+	if err := tx.RawQuery(fmt.Sprintf(query, table.tableName, table.columns), args...).First(row); err != nil {
 		return nil, table.wrapError(err, "creating")
 	}
 	return row, nil
@@ -208,7 +213,7 @@ func findSCIMRow[T any](tx *storage.Connection, table scimTable, target SCIMTarg
 func findUnchangedSCIMRow[T any](tx *storage.Connection, table scimTable, target SCIMTarget, resource []byte) (*T, error) {
 	row := new(T)
 	if err := tx.RawQuery(
-		fmt.Sprintf("SELECT %s FROM %q WHERE %s AND resource = ?::jsonb AND "+scimVersionClause+" FOR UPDATE", table.columns, table.tableName, table.targetClause()),
+		fmt.Sprintf("SELECT %s FROM %q WHERE %s AND %s = ?::jsonb AND "+scimVersionClause+" FOR UPDATE", table.columns, table.tableName, table.targetClause(), table.stored),
 		target.ID, target.ProviderID, string(resource), target.UpdatedAt, target.UpdatedAt,
 	).First(row); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -229,7 +234,7 @@ func replaceSCIMRowIfChanged[T any](tx *storage.Connection, table scimTable, tar
 }
 
 func replaceSCIMRow[T any](tx *storage.Connection, table scimTable, target SCIMTarget, resource []byte) (*T, error) {
-	return writeSCIMRow[T](tx, table, target, scimWrite{verb: "replacing", sql: "UPDATE %q SET resource = ?::jsonb, updated_at = clock_timestamp()", args: []any{string(resource)}})
+	return writeSCIMRow[T](tx, table, target, scimWrite{verb: "replacing", sql: "UPDATE %q SET resource = " + table.written + ", updated_at = clock_timestamp()", args: []any{string(resource)}})
 }
 
 type scimWrite struct {
@@ -249,8 +254,8 @@ func writeSCIMRow[T any](tx *storage.Connection, table scimTable, target SCIMTar
 	if !errors.Is(err, sql.ErrNoRows) || target.UpdatedAt == nil {
 		return nil, table.wrapError(err, write.verb)
 	}
-	exists, err := tx.Q().Where(table.targetClause(), target.ID, target.ProviderID).Exists(new(T))
-	if err != nil {
+	var exists bool
+	if err := tx.RawQuery(fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %q WHERE %s)", table.tableName, table.targetClause()), target.ID, target.ProviderID).First(&exists); err != nil {
 		return nil, errors.Wrapf(err, "error finding %s", table.label)
 	}
 	if !exists {

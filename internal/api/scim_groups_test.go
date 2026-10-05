@@ -92,7 +92,7 @@ func (ts *SCIMTestSuite) TestGroupsLifecycle() {
 	var stored models.SCIMGroup
 	require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", id).First(&stored))
 	require.Equal(ts.T(), ts.A.ID, stored.SSOProviderID)
-	require.NotContains(ts.T(), string(stored.Resource), "members")
+	require.Contains(ts.T(), string(stored.Resource), alice)
 	require.NotContains(ts.T(), string(stored.Resource), `"id"`)
 
 	for _, filter := range []string{`displayName eq "Engineering"`, `displayName eq "engineering"`, `externalId eq "Finance"`, `displayName eq "Engineering" and externalId eq "Finance"`, `displayName eq "Nobody" or externalId eq "Finance"`} {
@@ -305,7 +305,7 @@ func (ts *SCIMTestSuite) TestGroupsRemoveDeletedMembers() {
 
 		require.Equal(ts.T(), []string{bob}, memberValues(ts.get(ts.TokenA, "/Groups/"+eng)))
 		require.Empty(ts.T(), memberValues(ts.get(ts.TokenA, "/Groups/"+ops)))
-		require.Zero(ts.T(), ts.countRows(&models.SCIMGroupMember{}, "scim_user_id = ?", alice))
+		require.Zero(ts.T(), ts.countRows(&models.SCIMGroup{}, "resource::text LIKE ?", "%"+alice+"%"))
 	})
 	require.Equal(ts.T(), []string{string(models.SCIMUserDeletedAction)}, actionsOf(entries))
 }

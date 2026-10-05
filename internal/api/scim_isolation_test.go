@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -130,7 +131,9 @@ func (ts *SCIMTestSuite) TestRevokedAndExpiredTokensRefusedEverywhere() {
 	require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", group).First(&stored))
 	require.Contains(ts.T(), string(stored.Resource), "Engineering")
 	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMGroup{}, "sso_provider_id = ?", ts.A.ID))
-	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMGroupMember{}, "group_id = ?", group))
+	var resource map[string]any
+	require.NoError(ts.T(), json.Unmarshal(stored.Resource, &resource))
+	require.Len(ts.T(), memberValues(resource), 1)
 
 	w, _ := ts.do(ts.TokenB, http.MethodGet, "/Users", "")
 	require.Equal(ts.T(), http.StatusOK, w.Code)
