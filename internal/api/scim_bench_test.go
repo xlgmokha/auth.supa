@@ -43,13 +43,10 @@ func BenchmarkSCIMGroup(b *testing.B) {
 			bench.expectEach(b, http.StatusOK, http.MethodGet, "/Groups/"+group+"?excludedAttributes=members", "")
 		})
 		b.Run(name+"/patch-add-then-remove-one", func(b *testing.B) {
-			add := `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"add","path":"members","value":[{"value":"` + extra.String() + `"}]}]}`
-			remove := `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"remove","path":"members[value eq \"` + extra.String() + `\"]"}]}`
-			bench.expectEach(b, http.StatusNoContent, http.MethodPatch, "/Groups/"+group, add, remove)
+			bench.expectEach(b, http.StatusNoContent, http.MethodPatch, "/Groups/"+group, patchOp(addMembers(extra.String())), patchOp(removeMember(extra.String())))
 		})
 		b.Run(name+"/patch-pathless-replace-unchanged", func(b *testing.B) {
-			body := `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","value":{"id":"` + group + `","displayName":"Engineering"}}]}`
-			bench.expectEach(b, http.StatusOK, http.MethodPatch, "/Groups/"+group, body)
+			bench.expectEach(b, http.StatusOK, http.MethodPatch, "/Groups/"+group, patchOp(`{"op":"replace","value":{"id":"`+group+`","displayName":"Engineering"}}`))
 		})
 		b.Run(name+"/put-unchanged", func(b *testing.B) {
 			body := putBody(group, members)
@@ -84,10 +81,10 @@ func BenchmarkSCIMUser(b *testing.B) {
 		bench.expectEach(b, http.StatusOK, http.MethodPut, "/Users/"+id, userBody(id, "one"), userBody(id, "two"))
 	})
 	b.Run("patch-title", func(b *testing.B) {
-		bench.expectEach(b, http.StatusOK, http.MethodPatch, "/Users/"+id, patchTitle("one"), patchTitle("two"))
+		bench.expectEach(b, http.StatusOK, http.MethodPatch, "/Users/"+id, patchOp(`{"op":"replace","path":"title","value":"one"}`), patchOp(`{"op":"replace","path":"title","value":"two"}`))
 	})
 	b.Run("patch-active-unchanged", func(b *testing.B) {
-		bench.expectEach(b, http.StatusOK, http.MethodPatch, "/Users/"+id, `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"active","value":true}]}`)
+		bench.expectEach(b, http.StatusOK, http.MethodPatch, "/Users/"+id, patchOp(`{"op":"replace","path":"active","value":true}`))
 	})
 }
 
@@ -130,10 +127,6 @@ func userBody(id, title string) string {
 		idField = `"id":"` + id + `",`
 	}
 	return `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],` + idField + `"userName":"bjensen@example.com","title":"` + title + `","active":true,"emails":[{"value":"bjensen@example.com","primary":true}]}`
-}
-
-func patchTitle(title string) string {
-	return `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"title","value":"` + title + `"}]}`
 }
 
 func (s *scimBench) seedUsers(b *testing.B, prefix string, n int) []uuid.UUID {

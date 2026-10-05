@@ -246,31 +246,6 @@ func (ts *SCIMTestSuite) TestGroupsExternalIDUniqueWithinProvider() {
 	ts.createGroup(ts.TokenB, groupWith("A", "g-1"))
 }
 
-func (ts *SCIMTestSuite) TestGroupsETagAndIfMatch() {
-	w, created := ts.do(ts.TokenA, http.MethodPost, "/Groups", groupWith("Engineering", "g-1"))
-	require.Equal(ts.T(), http.StatusCreated, w.Code, w.Body.String())
-	id := created["id"].(string)
-	stale := w.Header().Get("ETag")
-
-	patch := patchOp(`{"op":"replace","path":"displayName","value":"Platform"}`)
-	w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodPatch, "/Groups/"+id, patch, "If-Match", stale)
-	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
-	current := w.Header().Get("ETag")
-	require.NotEqual(ts.T(), stale, current)
-
-	for _, tc := range []struct{ method, body string }{
-		{http.MethodPut, groupWith("Engineering", "g-1")},
-		{http.MethodPatch, patch},
-		{http.MethodDelete, ""},
-	} {
-		w, _ := ts.doAs(protocol.MediaType, ts.TokenA, tc.method, "/Groups/"+id, tc.body, "If-Match", stale)
-		require.Equal(ts.T(), http.StatusPreconditionFailed, w.Code, tc.method+" "+w.Body.String())
-	}
-
-	w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodDelete, "/Groups/"+id, "", "If-Match", current)
-	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
-}
-
 func (ts *SCIMTestSuite) TestIdenticalPutChecksIfMatch() {
 	alice := ts.create(ts.TokenA, userWith("alice@example.com", "a-1"))
 	for path, body := range map[string]string{
@@ -379,19 +354,6 @@ func (ts *SCIMTestSuite) TestGroupsFilterOperators() {
 		`meta.created ge "2000-01-01T00:00:00Z"`: {engineering, finance},
 	} {
 		require.ElementsMatch(ts.T(), want, pluck(ts.listGroups(ts.TokenA, filter)["Resources"], "id"), filter)
-	}
-}
-
-func (ts *SCIMTestSuite) TestGroupsUnsupportedFilters() {
-	for _, filter := range []string{
-		`members.value eq "00000000-0000-0000-0000-000000000000"`,
-		`members[value eq "00000000-0000-0000-0000-000000000000"]`,
-		`members pr`,
-		`not (members.value eq "00000000-0000-0000-0000-000000000000")`,
-	} {
-		w, body := ts.do(ts.TokenA, http.MethodGet, "/Groups?"+url.Values{"filter": {filter}}.Encode(), "")
-		require.Equal(ts.T(), http.StatusBadRequest, w.Code, filter)
-		require.Equal(ts.T(), "invalidFilter", body["scimType"], filter)
 	}
 }
 

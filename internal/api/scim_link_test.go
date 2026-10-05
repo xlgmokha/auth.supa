@@ -496,17 +496,6 @@ func (ts *SCIMTestSuite) TestReplaceDeactivatesAndReactivates() {
 	require.Equal(ts.T(), http.StatusBadRequest, ts.refresh(refreshToken))
 }
 
-func (ts *SCIMTestSuite) TestPutInactiveRevokesSessions() {
-	id := ts.create(ts.TokenA, oktaUser)
-	user := ts.linkedUser(id)
-	refreshToken := ts.refreshToken(user)
-
-	require.Equal(ts.T(), false, ts.expect(http.StatusOK, http.MethodPut, "/Users/"+id, oktaUserWith("active", false))["active"])
-	require.Zero(ts.T(), ts.sessions(user))
-	require.Equal(ts.T(), http.StatusBadRequest, ts.refresh(refreshToken))
-	require.Len(ts.T(), ts.auditActions(models.SCIMUserUpdatedAction), 1)
-}
-
 func (ts *SCIMTestSuite) TestReplaceKeepsAdminBanWhenActiveDoesNotChange() {
 	id := ts.create(ts.TokenA, oktaUser)
 	require.NoError(ts.T(), ts.linkedUser(id).Ban(ts.API.db, time.Hour))
@@ -526,17 +515,27 @@ func (ts *SCIMTestSuite) TestReplaceLinksUnlinkedRow() {
 	require.False(ts.T(), user.IsBanned())
 }
 
-func (ts *SCIMTestSuite) TestDeleteLogsOutWithoutBanning() {
-	id := ts.create(ts.TokenA, oktaUser)
-	user := ts.linkedUser(id)
-	refreshToken := ts.refreshToken(user)
+func (ts *SCIMTestSuite) TestDeprovisionLogsOutWithoutBanning() {
+	for _, tc := range []struct {
+		method, body    string
+		status, updates int
+	}{
+		{http.MethodPut, oktaUserWith("active", false), http.StatusOK, 1},
+		{http.MethodDelete, "", http.StatusNoContent, 0},
+	} {
+		ts.SetupTest()
+		id := ts.create(ts.TokenA, oktaUser)
+		user := ts.linkedUser(id)
+		refreshToken := ts.refreshToken(user)
 
-	ts.expect(http.StatusNoContent, http.MethodDelete, "/Users/"+id, "")
+		ts.expect(tc.status, tc.method, "/Users/"+id, tc.body)
 
-	user = ts.reloadUser(user.ID)
-	require.False(ts.T(), user.IsBanned())
-	require.Zero(ts.T(), ts.sessions(user))
-	require.Equal(ts.T(), http.StatusBadRequest, ts.refresh(refreshToken))
+		user = ts.reloadUser(user.ID)
+		require.False(ts.T(), user.IsBanned(), tc.method)
+		require.Zero(ts.T(), ts.sessions(user), tc.method)
+		require.Equal(ts.T(), http.StatusBadRequest, ts.refresh(refreshToken), tc.method)
+		require.Len(ts.T(), ts.auditActions(models.SCIMUserUpdatedAction), tc.updates, tc.method)
+	}
 }
 
 func (ts *SCIMTestSuite) TestCreateReusesUserDeletedByProviderSameUserName() {

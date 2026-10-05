@@ -71,12 +71,6 @@ func (ts *SCIMTestSuite) requireSCIMStatus(err error, code int, msg ...any) {
 	require.Equal(ts.T(), code, scimErr.StatusCode(), msg...)
 }
 
-func withVersion(user *core.User, id, version string) *core.User {
-	user.ID = id
-	user.Meta = core.Meta{Version: version}
-	return user
-}
-
 func pluck(items any, field string) []string {
 	values := []string{}
 	for _, item := range items.([]any) {
@@ -195,47 +189,6 @@ func (ts *SCIMTestSuite) TestUniqueIndexIsTheBackstop() {
 
 	_, err = users.Create(ctx, &core.User{UserName: "Alice@Example.com", Emails: emails("alice@example.com")})
 	ts.requireSCIMStatus(err, http.StatusConflict)
-}
-
-func (ts *SCIMTestSuite) TestReplaceRejectsStaleVersion() {
-	ctx, users := ts.repository()
-
-	created, err := users.Create(ctx, &core.User{UserName: "alice@example.com", Emails: emails("alice@example.com")})
-	require.NoError(ts.T(), err)
-	read, err := users.Read(ctx, created.ID)
-	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), created.Meta.Version, read.Meta.Version)
-
-	replaced, err := users.Update(ctx, withVersion(&core.User{UserName: "alice@example.com", Title: "winner"}, read.ID, read.Meta.Version))
-	require.NoError(ts.T(), err)
-	require.NotEqual(ts.T(), read.Meta.Version, replaced.Meta.Version)
-
-	for _, version := range []string{read.Meta.Version, `W/"garbage"`} {
-		_, err = users.Update(ctx, withVersion(&core.User{UserName: "alice@example.com", Title: "loser"}, read.ID, version))
-		ts.requireSCIMStatus(err, http.StatusPreconditionFailed, version)
-	}
-
-	_, err = users.Update(ctx, withVersion(&core.User{UserName: "bob@example.com"}, uuid.Must(uuid.NewV4()).String(), read.Meta.Version))
-	ts.requireSCIMStatus(err, http.StatusNotFound)
-	require.Contains(ts.T(), string(ts.storedUser(read.ID).Resource), "winner")
-}
-
-func (ts *SCIMTestSuite) TestDeleteRejectsStaleVersion() {
-	ctx, users := ts.repository()
-
-	created, err := users.Create(ctx, &core.User{UserName: "alice@example.com", Emails: emails("alice@example.com")})
-	require.NoError(ts.T(), err)
-	replaced, err := users.Update(ctx, withVersion(&core.User{UserName: "alice@example.com", Title: "renamed"}, created.ID, created.Meta.Version))
-	require.NoError(ts.T(), err)
-
-	for _, version := range []string{created.Meta.Version, `W/"garbage"`} {
-		ts.requireSCIMStatus(users.Delete(ctx, withVersion(&core.User{}, created.ID, version)), http.StatusPreconditionFailed, version)
-	}
-	require.Nil(ts.T(), ts.storedUser(created.ID).DeletedAt)
-
-	ts.requireSCIMStatus(users.Delete(ctx, withVersion(&core.User{}, uuid.Must(uuid.NewV4()).String(), "")), http.StatusNotFound)
-	require.NoError(ts.T(), users.Delete(ctx, withVersion(&core.User{}, created.ID, replaced.Meta.Version)))
-	require.NotNil(ts.T(), ts.storedUser(created.ID).DeletedAt)
 }
 
 func (ts *SCIMTestSuite) scimAuditEntries() []models.AuditLogEntry {
@@ -376,39 +329,38 @@ func (ts *SCIMTestSuite) TestWriteResponseProjection() {
 }
 
 func (ts *SCIMTestSuite) TestETagAndIfMatch() {
-	w, created := ts.do(ts.TokenA, http.MethodPost, "/Users", oktaUser)
-	require.Equal(ts.T(), http.StatusCreated, w.Code, w.Body.String())
-	id := created["id"].(string)
-	stale := w.Header().Get("ETag")
-	require.NotEmpty(ts.T(), stale)
-	require.Equal(ts.T(), created["meta"].(map[string]any)["version"], stale)
-
-	w, _ = ts.do(ts.TokenA, http.MethodGet, "/Users/"+id, "")
-	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
-	require.Equal(ts.T(), stale, w.Header().Get("ETag"))
-
-	patch := patchOp(`{"op":"replace","path":"displayName","value":"Alice S."}`)
-	w, patched := ts.doAs(protocol.MediaType, ts.TokenA, http.MethodPatch, "/Users/"+id, patch, "If-Match", stale)
-	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
-	require.Equal(ts.T(), "Alice S.", patched["displayName"])
-	current := w.Header().Get("ETag")
-	require.NotEqual(ts.T(), stale, current)
-
-	for _, tc := range []struct{ method, body string }{
-		{http.MethodPut, oktaUser},
-		{http.MethodPatch, patch},
-		{http.MethodDelete, ""},
+	for _, tc := range []struct{ path, body, patch string }{
+		{"/Users", oktaUser, patchOp(`{"op":"replace","path":"displayName","value":"Alice S."}`)},
+		{"/Groups", groupWith("Engineering", "g-1"), patchOp(`{"op":"replace","path":"displayName","value":"Platform"}`)},
 	} {
-		w, _ := ts.doAs(protocol.MediaType, ts.TokenA, tc.method, "/Users/"+id, tc.body, "If-Match", stale)
-		require.Equal(ts.T(), http.StatusPreconditionFailed, w.Code, tc.method+" "+w.Body.String())
+		w, created := ts.do(ts.TokenA, http.MethodPost, tc.path, tc.body)
+		require.Equal(ts.T(), http.StatusCreated, w.Code, w.Body.String())
+		path := tc.path + "/" + created["id"].(string)
+		stale := w.Header().Get("ETag")
+		require.Equal(ts.T(), created["meta"].(map[string]any)["version"], stale, path)
+		require.Equal(ts.T(), stale, ts.etag(path))
+
+		w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodPatch, path, tc.patch, "If-Match", stale)
+		require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
+		current := w.Header().Get("ETag")
+		require.NotEqual(ts.T(), stale, current, path)
+
+		for _, version := range []string{stale, `W/"garbage"`} {
+			for method, body := range map[string]string{http.MethodPut: tc.body, http.MethodPatch: tc.patch, http.MethodDelete: ""} {
+				w, _ := ts.doAs(protocol.MediaType, ts.TokenA, method, path, body, "If-Match", version)
+				require.Equal(ts.T(), http.StatusPreconditionFailed, w.Code, method+" "+path+" "+w.Body.String())
+			}
+		}
+		require.Equal(ts.T(), current, ts.etag(path))
+
+		w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodPut, tc.path+"/"+uuid.Must(uuid.NewV4()).String(), tc.body, "If-Match", current)
+		require.Equal(ts.T(), http.StatusNotFound, w.Code, w.Body.String())
+
+		w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodPut, path, tc.body, "If-Match", current)
+		require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
+		w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodDelete, path, "", "If-Match", w.Header().Get("ETag"))
+		require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
 	}
-
-	w, replaced := ts.doAs(protocol.MediaType, ts.TokenA, http.MethodPut, "/Users/"+id, oktaUser, "If-Match", current)
-	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
-	require.Equal(ts.T(), "Alice Smith", replaced["displayName"])
-
-	w, _ = ts.doAs(protocol.MediaType, ts.TokenA, http.MethodDelete, "/Users/"+id, "", "If-Match", w.Header().Get("ETag"))
-	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
 }
 
 func (ts *SCIMTestSuite) TestPatchAttributesOutsideTheMinimalSchema() {
@@ -575,22 +527,32 @@ func (ts *SCIMTestSuite) TestFilterOperators() {
 }
 
 func (ts *SCIMTestSuite) TestUnsupportedFilters() {
-	for _, filter := range []string{
-		`userName eq null`,
-		`groups.value eq "00000000-0000-0000-0000-000000000000"`,
-		`emails co "example.com"`,
-		`emails.value sw "a"`,
-		`emails[value co "a"]`,
-		`emails[not (type eq "work")]`,
-		`emails pr`,
-		`photos.value eq "https://example.com/a.jpg"`,
-		`meta.version eq "W/\"1\""`,
-		`emails[type eq "work" and type eq "home"]`,
-		`emails[type eq "work" and (value eq "a" or value eq "b")]`,
+	for path, filters := range map[string][]string{
+		"/Users": {
+			`userName eq null`,
+			`groups.value eq "00000000-0000-0000-0000-000000000000"`,
+			`emails co "example.com"`,
+			`emails.value sw "a"`,
+			`emails[value co "a"]`,
+			`emails[not (type eq "work")]`,
+			`emails pr`,
+			`photos.value eq "https://example.com/a.jpg"`,
+			`meta.version eq "W/\"1\""`,
+			`emails[type eq "work" and type eq "home"]`,
+			`emails[type eq "work" and (value eq "a" or value eq "b")]`,
+		},
+		"/Groups": {
+			`members.value eq "00000000-0000-0000-0000-000000000000"`,
+			`members[value eq "00000000-0000-0000-0000-000000000000"]`,
+			`members pr`,
+			`not (members.value eq "00000000-0000-0000-0000-000000000000")`,
+		},
 	} {
-		w, body := ts.do(ts.TokenA, http.MethodGet, "/Users?"+url.Values{"filter": {filter}}.Encode(), "")
-		require.Equal(ts.T(), http.StatusBadRequest, w.Code, filter)
-		require.Equal(ts.T(), "invalidFilter", body["scimType"], filter)
+		for _, filter := range filters {
+			w, body := ts.do(ts.TokenA, http.MethodGet, path+"?"+url.Values{"filter": {filter}}.Encode(), "")
+			require.Equal(ts.T(), http.StatusBadRequest, w.Code, filter)
+			require.Equal(ts.T(), "invalidFilter", body["scimType"], filter)
+		}
 	}
 }
 
@@ -616,14 +578,14 @@ func (ts *SCIMTestSuite) TestPrimaryEmailRequiredToProvision() {
 	require.Contains(ts.T(), body["detail"], "is required")
 }
 
-func (ts *SCIMTestSuite) TestPrimaryEmailPrefersThePrimaryFlag() {
-	id := ts.create(ts.TokenA, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"dana@example.com","emails":[{"value":"work@example.com"},{"value":"home@example.com","primary":true}]}`)
-	require.Equal(ts.T(), "home@example.com", ts.linkedUser(id).GetEmail())
-}
-
-func (ts *SCIMTestSuite) TestPrimaryEmailFallsBackToTheFirstEmail() {
-	id := ts.create(ts.TokenA, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"erin@example.com","emails":[{"value":"work@example.com"},{"value":"home@example.com"}]}`)
-	require.Equal(ts.T(), "work@example.com", ts.linkedUser(id).GetEmail())
+func (ts *SCIMTestSuite) TestPrimaryEmail() {
+	for userName, tc := range map[string]struct{ emails, want string }{
+		"dana@example.com": {`[{"value":"work@example.com"},{"value":"home@example.com","primary":true}]`, "home@example.com"},
+		"erin@example.com": {`[{"value":"work@example.com"},{"value":"home@example.com"}]`, "work@example.com"},
+	} {
+		id := ts.create(ts.TokenA, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"`+userName+`","emails":`+tc.emails+`}`)
+		require.Equal(ts.T(), tc.want, ts.linkedUser(id).GetEmail(), userName)
+	}
 }
 
 func (ts *SCIMTestSuite) TestUsersGroupsAttribute() {

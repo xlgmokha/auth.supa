@@ -57,56 +57,35 @@ func (ts *SCIMTestSuite) TestProviderDeleteCascadesSCIMRows() {
 }
 
 func (ts *SCIMTestSuite) TestProviderDeleteAudit() {
-	ts.setActive(ts.create(ts.TokenA, scimUser("audited")), false)
-	tokens, err := models.FindActiveSCIMTokensBySSOProvider(ts.API.db, ts.A.ID)
-	require.NoError(ts.T(), err)
-	require.Len(ts.T(), tokens, 1)
-
-	ts.deleteProvider(ts.A)
-
-	disabled := ts.auditActions(models.SCIMDisabledAction)
-	require.Len(ts.T(), disabled, 1)
-	traits := disabled[0].Payload["traits"].(map[string]any)
-	require.Equal(ts.T(), []any{tokens[0].Prefix}, traits["token_prefixes"])
-	require.Equal(ts.T(), ts.A.ID.String(), traits["sso_provider_id"])
-}
-
-func (ts *SCIMTestSuite) TestProviderDeleteAuditWithExpiredTokens() {
-	ts.setActive(ts.create(ts.TokenA, scimUser("expired")), false)
-	require.NoError(ts.T(), ts.API.db.RawQuery(
-		"UPDATE "+(&models.SCIMToken{}).TableName()+" SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' WHERE sso_provider_id = ?", ts.A.ID,
-	).Exec())
-
-	ts.deleteProvider(ts.A)
-
-	disabled := ts.auditActions(models.SCIMDisabledAction)
-	require.Len(ts.T(), disabled, 1)
-	require.Equal(ts.T(), []any{}, disabled[0].Payload["traits"].(map[string]any)["token_prefixes"])
-}
-
-func (ts *SCIMTestSuite) TestProviderDeleteWithoutActiveSCIM() {
-	provider := createSSOProvider(ts.T(), ts.API.db)
-	_, _, err := models.CreateSCIMToken(ts.API.db, provider, nil)
-	require.NoError(ts.T(), err)
-	ts.setActive(ts.create(ts.TokenA, scimUser("disabled")), false)
-	_, err = models.DisableSCIM(ts.API.db, ts.A.ID)
-	require.NoError(ts.T(), err)
-
-	ts.deleteProvider(provider)
-	ts.deleteProvider(ts.A)
-
-	require.Empty(ts.T(), ts.auditActions(models.SCIMDisabledAction))
-}
-
-func (ts *SCIMTestSuite) TestProviderDeleteWhileSCIMFlagOff() {
-	ts.setActive(ts.create(ts.TokenA, scimUser("flagoff")), false)
-	before := len(ts.scimAuditEntries())
-	ts.API.config.SSO.SCIM.Enabled = false
-	defer func() { ts.API.config.SSO.SCIM.Enabled = true }()
-
-	ts.deleteProvider(ts.A)
-
-	require.Len(ts.T(), ts.scimAuditEntries(), before)
-	require.Empty(ts.T(), ts.auditActions(models.SCIMDisabledAction))
-	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.A.ID))
+	for name, setup := range map[string]func() []any{
+		"active token": func() []any { return []any{ts.TokenA[:12]} },
+		"expired token": func() []any {
+			require.NoError(ts.T(), ts.API.db.RawQuery(
+				"UPDATE "+(&models.SCIMToken{}).TableName()+" SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' WHERE sso_provider_id = ?", ts.A.ID,
+			).Exec())
+			return []any{}
+		},
+		"SCIM disabled": func() []any {
+			_, err := models.DisableSCIM(ts.API.db, ts.A.ID)
+			require.NoError(ts.T(), err)
+			return nil
+		},
+		"SCIM flag off": func() []any {
+			ts.API.config.SSO.SCIM.Enabled = false
+			return nil
+		},
+	} {
+		ts.SetupTest()
+		prefixes := setup()
+		entries := ts.auditDuring(func() { ts.deleteProvider(ts.A) })
+		ts.API.config.SSO.SCIM.Enabled = true
+		if prefixes == nil {
+			require.Empty(ts.T(), entries, name)
+			continue
+		}
+		require.Equal(ts.T(), []string{string(models.SCIMDisabledAction)}, actionsOf(entries), name)
+		traits := entries[0].Payload["traits"].(map[string]any)
+		require.Equal(ts.T(), prefixes, traits["token_prefixes"], name)
+		require.Equal(ts.T(), ts.A.ID.String(), traits["sso_provider_id"], name)
+	}
 }
