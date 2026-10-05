@@ -905,6 +905,20 @@ Use this to enable/disable anonymous sign-ins.
 
 Enable IP address forwarding using the `Sb-Forwarded-For` HTTP request header. When enabled, Auth will parse the first value of this header as an IP address and use it for IP address tracking and rate limiting. Make sure this header is fully trusted before enabling this feature by only passing it from trustworthy clients or proxies.
 
+### SCIM provisioning
+
+`GOTRUE_SSO_SCIM_ENABLED` - `bool`
+
+Enables the SCIM 2.0 server at `/scim/v2` and the `/admin/sso/providers/{id}/scim` Admin API. Requires SAML (`GOTRUE_SAML_ENABLED`). Each SSO provider must still enable SCIM through the Admin API before its bearer tokens are accepted. Defaults to `false`.
+
+`GOTRUE_SSO_SCIM_RATE_LIMIT_DIRECTORY` - `number`
+
+Requests per second accepted from the bearer tokens of one SSO provider's SCIM directory, shared by all of its tokens. One directory reaching its limit does not affect another. Defaults to `30`.
+
+`GOTRUE_SSO_SCIM_RATE_LIMIT_IP` - `number`
+
+Requests per second accepted per IP address for SCIM requests whose bearer token is missing or does not resolve to a directory. Defaults to `5`.
+
 ## Endpoints
 
 Auth exposes the following endpoints:

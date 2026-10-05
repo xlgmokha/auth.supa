@@ -409,11 +409,6 @@ type ExperimentalConfiguration struct {
 	// Env: GOTRUE_EXPERIMENTAL_CURSOR_PAGINATION_ENABLED=true
 	CursorPaginationEnabled bool `split_words:"true" default:"false"`
 
-	// ScimEnabled gates the /scim/v2 router. Ships dark: no per-provider
-	// enablement yet, just a kill switch for internal verification.
-	// Env: GOTRUE_EXPERIMENTAL_SCIM_ENABLED=true
-	ScimEnabled bool `split_words:"true" default:"false"`
-
 	// CreateEmailIdentityOnPasswordSetEnabled creates the missing email provider
 	// identity for a user when a password is added to an account that didn't have
 	// one (e.g. a user who signed up with an external provider and later sets a password).
@@ -506,6 +501,7 @@ type GlobalConfiguration struct {
 	Sessions        SessionsConfiguration    `json:"sessions"`
 	MFA             MFAConfiguration         `json:"MFA"`
 	SAML            SAMLConfiguration        `json:"saml"`
+	SSO             SSOConfiguration         `json:"sso"`
 	WebAuthn        WebAuthnConfiguration    `json:"webauthn"`
 	Passkey         PasskeyConfiguration     `json:"passkey"`
 	CORS            CORSConfiguration        `json:"cors"`
@@ -513,6 +509,28 @@ type GlobalConfiguration struct {
 
 	Experimental ExperimentalConfiguration `json:"experimental"`
 	Reloading    ReloadingConfiguration    `json:"reloading"`
+}
+
+// SSOConfiguration holds settings shared by every SSO provider.
+type SSOConfiguration struct {
+	SCIM SCIMConfiguration `json:"scim"`
+}
+
+// SCIMConfiguration gates SCIM 2.0 provisioning (RFC 7643, RFC 7644) for SSO
+// providers. Each provider still has to enable SCIM through the Admin API.
+type SCIMConfiguration struct {
+	// Env: GOTRUE_SSO_SCIM_ENABLED=true
+	Enabled bool `json:"enabled" default:"false"`
+
+	// RateLimitDirectory is the number of requests per second a directory's
+	// bearer tokens may make, shared across all of its tokens.
+	// Env: GOTRUE_SSO_SCIM_RATE_LIMIT_DIRECTORY=30
+	RateLimitDirectory float64 `json:"rate_limit_directory" split_words:"true" default:"30"`
+
+	// RateLimitIP is the number of requests per second, per IP address, for
+	// requests whose bearer token does not resolve to a directory.
+	// Env: GOTRUE_SSO_SCIM_RATE_LIMIT_IP=5
+	RateLimitIP float64 `json:"rate_limit_ip" split_words:"true" default:"5"`
 }
 
 type CORSConfiguration struct {

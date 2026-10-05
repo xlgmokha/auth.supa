@@ -30,7 +30,7 @@ func TestSCIM(t *testing.T) {
 		api, _, err := setupAPIForTest()
 		require.NoError(t, err)
 
-		require.False(t, api.config.Experimental.ScimEnabled)
+		require.False(t, api.config.SSO.SCIM.Enabled)
 
 		for _, path := range scimPaths {
 			r := httptest.NewRequest(http.MethodGet, path, nil)
@@ -57,12 +57,12 @@ func TestSCIM(t *testing.T) {
 	t.Run("Can be enabled", func(t *testing.T) {
 		api, _, err := setupAPIForTestWithCallback(func(config *conf.GlobalConfiguration, conn *storage.Connection) {
 			if config != nil {
-				config.Experimental.ScimEnabled = true
+				config.SSO.SCIM.Enabled = true
 			}
 		})
 		require.NoError(t, err)
 
-		require.True(t, api.config.Experimental.ScimEnabled)
+		require.True(t, api.config.SSO.SCIM.Enabled)
 
 		t.Run(scimServiceProviderConfigPath, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, scimServiceProviderConfigPath, nil)

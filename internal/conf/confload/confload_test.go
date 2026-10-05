@@ -266,7 +266,7 @@ func TestExperimentalCursorPaginationEnabled(t *testing.T) {
 	}
 }
 
-func TestExperimentalScimEndpoints(t *testing.T) {
+func TestSSOSCIMConfig(t *testing.T) {
 	baseEnv := func() {
 		os.Clearenv()
 		os.Setenv("GOTRUE_SITE_URL", "http://localhost:8080")
@@ -281,7 +281,22 @@ func TestExperimentalScimEndpoints(t *testing.T) {
 		cfg, err := LoadGlobalFromEnv()
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
-		assert.Equal(t, false, cfg.Experimental.ScimEnabled)
+		assert.Equal(t, false, cfg.SSO.SCIM.Enabled)
+		assert.Equal(t, 30.0, cfg.SSO.SCIM.RateLimitDirectory)
+		assert.Equal(t, 5.0, cfg.SSO.SCIM.RateLimitIP)
+	}
+
+	{
+		baseEnv()
+		os.Setenv("GOTRUE_SSO_SCIM_ENABLED", "true")
+		os.Setenv("GOTRUE_SSO_SCIM_RATE_LIMIT_DIRECTORY", "100")
+		os.Setenv("GOTRUE_SSO_SCIM_RATE_LIMIT_IP", "2")
+		cfg, err := LoadGlobalFromEnv()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		assert.Equal(t, true, cfg.SSO.SCIM.Enabled)
+		assert.Equal(t, 100.0, cfg.SSO.SCIM.RateLimitDirectory)
+		assert.Equal(t, 2.0, cfg.SSO.SCIM.RateLimitIP)
 	}
 
 	{
@@ -290,7 +305,7 @@ func TestExperimentalScimEndpoints(t *testing.T) {
 		cfg, err := LoadGlobalFromEnv()
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
-		assert.Equal(t, true, cfg.Experimental.ScimEnabled)
+		assert.Equal(t, false, cfg.SSO.SCIM.Enabled)
 	}
 }
 
