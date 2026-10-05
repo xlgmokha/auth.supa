@@ -34,8 +34,8 @@ func newProfile(user *core.User) Profile {
 
 func (p Profile) IdentityData() map[string]any {
 	return map[string]any{
-		ClaimSub:               p.UserName,
-		ClaimEmail:             p.Email,
-		scimClaimEmailVerified: true,
+		ClaimSub:           p.UserName,
+		ClaimEmail:         p.Email,
+		claimEmailVerified: true,
 	}
 }

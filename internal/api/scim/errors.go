@@ -12,13 +12,13 @@ import (
 func Error(err error) error {
 	switch {
 	case models.IsNotFoundError(err):
-		return errSCIMNotFound()
+		return errNotFound()
 	case errors.Is(err, models.ErrSCIMStale):
-		return errSCIMStale()
+		return errStale()
 	case errors.Is(err, models.ErrSCIMGroupConflict):
 		return scimerrors.ErrUniqueness(`"externalId" must be unique`)
 	case errors.Is(err, models.ErrSCIMGroupMemberNotFound):
-		return errSCIMMemberNotFound()
+		return errMemberNotFound()
 	case errors.Is(err, models.ErrSCIMGroupCycle):
 		return scimerrors.ErrInvalidValue(`"members" must not create a group cycle`)
 	case errors.Is(err, models.ErrSCIMUserConflict):
@@ -35,15 +35,15 @@ func ErrStatus(status int, detail string) error {
 	return scimerrors.NewError(status, "", detail)
 }
 
-func errSCIMNotFound() error {
+func errNotFound() error {
 	return scimerrors.ErrNotFound("resource not found")
 }
 
-func errSCIMStale() error {
+func errStale() error {
 	return scimerrors.ErrPreconditionFailed("resource has changed on the server")
 }
 
-func errSCIMMemberNotFound() error {
+func errMemberNotFound() error {
 	return scimerrors.ErrInvalidValue(`"members.value" must reference a User or Group in this provider`)
 }
 

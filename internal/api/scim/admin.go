@@ -109,7 +109,7 @@ func DeleteUsers(config *conf.GlobalConfiguration, tx *storage.Connection, r *ht
 		if err := models.RemoveSCIMMemberFromGroups(tx, rows[i].ID); err != nil {
 			return err
 		}
-		event := auditEvent{Actor: actor, Action: models.SCIMUserDeletedAction, ProviderID: rows[i].SSOProviderID, Traits: scimUserTraits(&rows[i], &userID)}
+		event := auditEvent{Actor: actor, Action: models.SCIMUserDeletedAction, ProviderID: rows[i].SSOProviderID, Traits: userTraits(&rows[i], &userID)}
 		if err := audit(config, tx, r, event); err != nil {
 			return err
 		}
