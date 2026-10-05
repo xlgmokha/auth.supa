@@ -76,7 +76,7 @@ func LockUnchangedSCIMGroup(tx *storage.Connection, providerID, id uuid.UUID, re
 }
 
 func DeleteSCIMGroup(tx *storage.Connection, target SCIMTarget) (*SCIMGroup, error) {
-	return writeSCIMRow[SCIMGroup](tx, scimGroupsTable, target, scimWrite{verb: "deleting", sql: "DELETE FROM %q"})
+	return writeSCIMRow[SCIMGroup](tx, scimGroupsTable, target, scimWrite{verb: "deleting", sql: "UPDATE %q SET deleted_at = now(), updated_at = clock_timestamp()"})
 }
 
 func FindSCIMMembershipsByGroup(tx *storage.Connection, providerID uuid.UUID, groupIDs []uuid.UUID) ([]SCIMGroupMembership, error) {

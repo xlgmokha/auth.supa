@@ -642,3 +642,37 @@ func (ts *SCIMTestSuite) TestNestedGroups() {
 	require.Empty(ts.T(), memberValues(ts.get(ts.TokenA, "/Groups/"+platform)))
 	require.NotContains(ts.T(), ts.get(ts.TokenA, "/Users/"+alice), "groups")
 }
+
+func (ts *SCIMTestSuite) TestDeletedGroupIsGone() {
+	alice := ts.create(ts.TokenA, userWith("alice@example.com", "a-1"))
+	eng := ts.createGroup(ts.TokenA, groupWith("Engineering", "g-1", alice))
+	platform := ts.createGroup(ts.TokenA, groupWith("Platform", "g-2"))
+	ts.expect(http.StatusNoContent, http.MethodDelete, "/Groups/"+eng, "")
+
+	for _, tc := range []struct{ method, body string }{
+		{http.MethodGet, ""},
+		{http.MethodPut, groupWith("Engineering", "g-1")},
+		{http.MethodPatch, patchOp(addMembers(alice))},
+		{http.MethodDelete, ""},
+	} {
+		ts.expect(http.StatusNotFound, tc.method, "/Groups/"+eng, tc.body)
+	}
+	require.EqualValues(ts.T(), 1, ts.get(ts.TokenA, "/Groups")["totalResults"])
+	require.EqualValues(ts.T(), 0, ts.get(ts.TokenA, "/Groups?filter="+url.QueryEscape(`displayName eq "Engineering"`))["totalResults"])
+	require.NotContains(ts.T(), ts.get(ts.TokenA, "/Users/"+alice), "groups")
+	ts.expect(http.StatusBadRequest, http.MethodPatch, "/Groups/"+platform, patchOp(addMembers(eng)))
+	require.NotEqual(ts.T(), eng, ts.createGroup(ts.TokenA, groupWith("Engineering", "g-1", alice)))
+}
+
+func (ts *SCIMTestSuite) TestResourceTypesAreIsolated() {
+	user := ts.create(ts.TokenA, userWith("alice@example.com", "a-1"))
+	group := ts.createGroup(ts.TokenA, groupWith("Engineering", "g-1"))
+
+	for _, path := range []string{"/Users/" + group, "/Groups/" + user} {
+		ts.expect(http.StatusNotFound, http.MethodGet, path, "")
+		ts.expect(http.StatusNotFound, http.MethodPatch, path, patchOp(`{"op":"replace","path":"externalId","value":"x"}`))
+		ts.expect(http.StatusNotFound, http.MethodDelete, path, "")
+	}
+	require.EqualValues(ts.T(), 1, ts.get(ts.TokenA, "/Users")["totalResults"])
+	require.EqualValues(ts.T(), 1, ts.get(ts.TokenA, "/Groups")["totalResults"])
+}
