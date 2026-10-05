@@ -37,9 +37,7 @@ const oktaUser = `{
 }`
 
 func (ts *SCIMTestSuite) create(token, body string) string {
-	w, created := ts.do(token, http.MethodPost, "/Users", body)
-	require.Equal(ts.T(), http.StatusCreated, w.Code, w.Body.String())
-	return created["id"].(string)
+	return ts.expectAs(token, http.StatusCreated, http.MethodPost, "/Users", body)["id"].(string)
 }
 
 func (ts *SCIMTestSuite) list(token, filter string) map[string]any {
@@ -47,9 +45,7 @@ func (ts *SCIMTestSuite) list(token, filter string) map[string]any {
 }
 
 func (ts *SCIMTestSuite) get(token, path string) map[string]any {
-	w, body := ts.do(token, http.MethodGet, path, "")
-	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
-	return body
+	return ts.expectAs(token, http.StatusOK, http.MethodGet, path, "")
 }
 
 func (ts *SCIMTestSuite) repository() (context.Context, server.Repository[*core.User]) {
@@ -119,8 +115,7 @@ func (ts *SCIMTestSuite) TestOktaLifecycle() {
 	require.Equal(ts.T(), false, patched["active"])
 	require.False(ts.T(), ts.storedUser(id).Active())
 
-	w, _ = ts.do(ts.TokenA, http.MethodDelete, "/Users/"+id, "")
-	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
+	ts.expectAs(ts.TokenA, http.StatusNoContent, http.MethodDelete, "/Users/"+id, "")
 
 	for _, tc := range []struct{ method, body string }{
 		{http.MethodGet, ""},
@@ -128,8 +123,7 @@ func (ts *SCIMTestSuite) TestOktaLifecycle() {
 		{http.MethodPatch, patchOp(`{"op":"replace","value":{"active":true}}`)},
 		{http.MethodDelete, ""},
 	} {
-		w, _ = ts.do(ts.TokenA, tc.method, "/Users/"+id, tc.body)
-		require.Equal(ts.T(), http.StatusNotFound, w.Code, tc.method)
+		ts.expectAs(ts.TokenA, http.StatusNotFound, tc.method, "/Users/"+id, tc.body)
 	}
 	for _, filter := range []string{"", `userName eq "alice@example.com"`, `externalId eq "00u1abcd"`} {
 		require.EqualValues(ts.T(), 0, ts.list(ts.TokenA, filter)["totalResults"], filter)
@@ -204,38 +198,35 @@ func (ts *SCIMTestSuite) auditDuring(fn func()) []models.AuditLogEntry {
 func (ts *SCIMTestSuite) TestAuditLog() {
 	id := ts.create(ts.TokenA, oktaUser)
 
-	w, _ := ts.do(ts.TokenA, http.MethodPost, "/Users", oktaUser)
-	require.Equal(ts.T(), http.StatusConflict, w.Code, w.Body.String())
+	ts.expectAs(ts.TokenA, http.StatusConflict, http.MethodPost, "/Users", oktaUser)
 
 	for _, operation := range []string{
 		`{"op":"replace","path":"displayName","value":"Alice S."}`,
 		`{"op":"replace","path":"active","value":false}`,
 		`{"op":"replace","path":"active","value":true}`,
 	} {
-		w, _ := ts.do(ts.TokenA, http.MethodPatch, "/Users/"+id, patchOp(operation))
-		require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
+		ts.expectAs(ts.TokenA, http.StatusOK, http.MethodPatch, "/Users/"+id, patchOp(operation))
 	}
 
-	w, _ = ts.do(ts.TokenA, http.MethodDelete, "/Users/"+id, "")
-	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
+	ts.expectAs(ts.TokenA, http.StatusNoContent, http.MethodDelete, "/Users/"+id, "")
 
-	tokens, err := models.FindSCIMTokensBySSOProvider(ts.API.db, ts.A.ID)
-	require.NoError(ts.T(), err)
-	userID := ts.linkedUser(id).ID.String()
-
-	actions := []string{}
-	for _, entry := range ts.scimAuditEntries() {
-		actions = append(actions, entry.Payload["action"].(string))
-		require.Equal(ts.T(), uuid.Nil.String(), entry.Payload["actor_id"])
-		require.Equal(ts.T(), "scim:"+tokens[0].Prefix, entry.Payload["actor_username"])
-		traits := entry.Payload["traits"].(map[string]any)
-		require.Equal(ts.T(), ts.A.ID.String(), traits["sso_provider_id"])
-		require.Equal(ts.T(), id, traits["scim_user_id"])
-		require.Equal(ts.T(), userID, traits["user_id"])
-		require.Equal(ts.T(), "success", traits["outcome"])
+	entries := ts.scimAuditEntries()
+	for _, entry := range entries {
+		ts.requireSCIMAudit(entry, map[string]any{"scim_user_id": id, "user_id": ts.linkedUser(id).ID.String()})
 	}
 	created, updated, deleted := string(models.SCIMUserCreatedAction), string(models.SCIMUserUpdatedAction), string(models.SCIMUserDeletedAction)
-	require.Equal(ts.T(), []string{created, updated, updated, updated, deleted}, actions)
+	require.Equal(ts.T(), []string{created, updated, updated, updated, deleted}, actionsOf(entries))
+}
+
+func (ts *SCIMTestSuite) requireSCIMAudit(entry models.AuditLogEntry, traits map[string]any) {
+	require.Equal(ts.T(), uuid.Nil.String(), entry.Payload["actor_id"])
+	require.Equal(ts.T(), "scim:"+ts.TokenA[:12], entry.Payload["actor_username"])
+	got := entry.Payload["traits"].(map[string]any)
+	require.Equal(ts.T(), ts.A.ID.String(), got["sso_provider_id"])
+	require.Equal(ts.T(), "success", got["outcome"])
+	for key, want := range traits {
+		require.Equal(ts.T(), want, got[key], key)
+	}
 }
 
 func (ts *SCIMTestSuite) TestRolesRoundTrip() {
@@ -558,8 +549,7 @@ func (ts *SCIMTestSuite) TestUnsupportedFilters() {
 
 func (ts *SCIMTestSuite) TestUnknownID() {
 	for _, id := range []string{"not-a-uuid", "00000000-0000-0000-0000-000000000000"} {
-		w, _ := ts.do(ts.TokenA, http.MethodGet, "/Users/"+id, "")
-		require.Equal(ts.T(), http.StatusNotFound, w.Code, id)
+		ts.expectAs(ts.TokenA, http.StatusNotFound, http.MethodGet, "/Users/"+id, "")
 	}
 }
 
@@ -619,8 +609,7 @@ func (ts *SCIMTestSuite) TestUsersGroupsAttribute() {
 	require.Len(ts.T(), patched["groups"], 2)
 	require.NotContains(ts.T(), string(ts.storedUser(alice).Resource), "groups")
 
-	w, _ = ts.do(ts.TokenA, http.MethodDelete, "/Groups/"+ops, "")
-	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
+	ts.expectAs(ts.TokenA, http.StatusNoContent, http.MethodDelete, "/Groups/"+ops, "")
 	require.Equal(ts.T(), []string{eng}, pluck(ts.get(ts.TokenA, "/Users/"+alice)["groups"], "value"))
 }
 

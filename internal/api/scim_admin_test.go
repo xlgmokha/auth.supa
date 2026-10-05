@@ -59,10 +59,7 @@ func (ts *SCIMTokensTestSuite) TestCreate() {
 }
 
 func (ts *SCIMTokensTestSuite) TestCreateWithoutBody() {
-	r := httptest.NewRequest(http.MethodPost, ts.tokensPath(ts.Provider), nil)
-	r.Header.Set("Authorization", "Bearer "+adminJWT(ts.T(), ts.Config.JWT.Secret))
-	w := httptest.NewRecorder()
-	ts.API.handler.ServeHTTP(w, r)
+	w := serveBearer(ts.API, http.MethodPost, ts.tokensPath(ts.Provider), adminJWT(ts.T(), ts.Config.JWT.Secret), "")
 	require.Equal(ts.T(), http.StatusCreated, w.Code, w.Body.String())
 }
 
@@ -235,10 +232,7 @@ func (ts *SCIMTokensTestSuite) TestDisableStopsAuthenticatedRequests() {
 	token := ts.create(ts.Provider, map[string]any{})
 	ts.expectStatus(http.MethodDelete, ts.Provider, false, 1)
 	for _, path := range []string{"/scim/v2/Users", "/scim/v2/Groups", "/scim/v2/Schemas", "/scim/v2/ResourceTypes", "/scim/v2/ServiceProviderConfig"} {
-		r := httptest.NewRequest(http.MethodGet, path, nil)
-		r.Header.Set("Authorization", "Bearer "+token.Token)
-		w := httptest.NewRecorder()
-		ts.API.handler.ServeHTTP(w, r)
+		w := serveBearer(ts.API, http.MethodGet, path, token.Token, "")
 		expected := http.StatusUnauthorized
 		if path == "/scim/v2/ServiceProviderConfig" {
 			expected = http.StatusOK
@@ -390,11 +384,7 @@ func (ts *SCIMTokensTestSuite) create(provider *models.SSOProvider, body any) Ad
 }
 
 func (ts *SCIMTokensTestSuite) scimRequest(token string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodGet, "/scim/v2/Users", nil)
-	r.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	ts.API.handler.ServeHTTP(w, r)
-	return w
+	return serveBearer(ts.API, http.MethodGet, "/scim/v2/Users", token, "")
 }
 
 func (ts *SCIMTokensTestSuite) scimPath(provider *models.SSOProvider) string {

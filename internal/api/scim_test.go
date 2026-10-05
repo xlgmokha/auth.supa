@@ -292,6 +292,19 @@ func queryAuditEntries(t require.TestingT, db *storage.Connection, where string,
 	return entries
 }
 
+func serveBearer(api *API, method, path, bearer, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if body != "" {
+		r.Header.Set("Content-Type", "application/json")
+	}
+	w := httptest.NewRecorder()
+	api.handler.ServeHTTP(w, r)
+	return w
+}
+
 func scimFixture(t *testing.T, file string) string {
 	data, err := fs.ReadFile(os.DirFS("testdata/scim"), file)
 	require.NoError(t, err)

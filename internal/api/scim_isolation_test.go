@@ -28,8 +28,7 @@ func (ts *SCIMTestSuite) TestTenantIsolation() {
 		{http.MethodPatch, patchOp(`{"op":"replace","value":{"active":false}}`)},
 		{http.MethodDelete, ""},
 	} {
-		w, _ := ts.do(ts.TokenA, tc.method, "/Users/"+idB, tc.body)
-		require.Equal(ts.T(), http.StatusNotFound, w.Code, tc.method)
+		ts.expectAs(ts.TokenA, http.StatusNotFound, tc.method, "/Users/"+idB, tc.body)
 	}
 
 	got := ts.get(ts.TokenB, "/Users/"+idB)
@@ -49,24 +48,20 @@ func (ts *SCIMTestSuite) TestTenantIsolationWithSameEmail() {
 			require.EqualValues(ts.T(), 1, found["totalResults"], filter)
 			require.Equal(ts.T(), ids[token], found["Resources"].([]any)[0].(map[string]any)["id"], filter)
 		}
-		w, _ := ts.do(token, http.MethodGet, "/Users/"+ids[other], "")
-		require.Equal(ts.T(), http.StatusNotFound, w.Code)
+		ts.expectAs(token, http.StatusNotFound, http.MethodGet, "/Users/"+ids[other], "")
 	}
 
-	w, _ := ts.do(ts.TokenA, http.MethodDelete, "/Users/"+ids[ts.TokenA], "")
-	require.Equal(ts.T(), http.StatusNoContent, w.Code)
+	ts.expectAs(ts.TokenA, http.StatusNoContent, http.MethodDelete, "/Users/"+ids[ts.TokenA], "")
 	require.Equal(ts.T(), true, ts.get(ts.TokenB, "/Users/"+ids[ts.TokenB])["active"])
 }
 
 func (ts *SCIMTestSuite) TestTombstonedUsersInvisibleToBothProviders() {
 	id := ts.create(ts.TokenA, userWith("alice@example.com", "a-1"))
 	group := ts.createGroup(ts.TokenA, groupWith("Engineering", "g-1", id))
-	w, _ := ts.do(ts.TokenA, http.MethodDelete, "/Users/"+id, "")
-	require.Equal(ts.T(), http.StatusNoContent, w.Code)
+	ts.expectAs(ts.TokenA, http.StatusNoContent, http.MethodDelete, "/Users/"+id, "")
 
 	for _, token := range []string{ts.TokenA, ts.TokenB} {
-		w, _ := ts.do(token, http.MethodGet, "/Users/"+id, "")
-		require.Equal(ts.T(), http.StatusNotFound, w.Code)
+		ts.expectAs(token, http.StatusNotFound, http.MethodGet, "/Users/"+id, "")
 		for _, filter := range []string{"", `userName eq "alice@example.com"`, `externalId eq "a-1"`} {
 			require.EqualValues(ts.T(), 0, ts.list(token, filter)["totalResults"], filter)
 		}
@@ -112,8 +107,7 @@ func (ts *SCIMTestSuite) TestRevokedAndExpiredTokensRefusedEverywhere() {
 		{http.MethodDelete, "/Groups/" + group, ""},
 	}
 	for name, token := range map[string]string{"revoked": ts.TokenA, "expired": expiredToken} {
-		w, _ := ts.do(token, http.MethodGet, "/ServiceProviderConfig", "")
-		require.Equal(ts.T(), http.StatusOK, w.Code, name+" GET /ServiceProviderConfig")
+		ts.expectAs(token, http.StatusOK, http.MethodGet, "/ServiceProviderConfig", "")
 		for _, route := range routes {
 			w, _ := ts.do(token, route.method, route.path, route.body)
 			require.Equal(ts.T(), http.StatusUnauthorized, w.Code, name+" "+route.method+" "+route.path)
@@ -135,8 +129,7 @@ func (ts *SCIMTestSuite) TestRevokedAndExpiredTokensRefusedEverywhere() {
 	require.NoError(ts.T(), json.Unmarshal(stored.Resource, &resource))
 	require.Len(ts.T(), memberValues(resource), 1)
 
-	w, _ := ts.do(ts.TokenB, http.MethodGet, "/Users", "")
-	require.Equal(ts.T(), http.StatusOK, w.Code)
+	ts.expectAs(ts.TokenB, http.StatusOK, http.MethodGet, "/Users", "")
 }
 
 func (ts *SCIMTestSuite) TestGroupsTenantIsolation() {
@@ -152,8 +145,7 @@ func (ts *SCIMTestSuite) TestGroupsTenantIsolation() {
 		{http.MethodPatch, patchOp(`{"op":"replace","path":"displayName","value":"Owned"}`)},
 		{http.MethodDelete, ""},
 	} {
-		w, _ := ts.do(ts.TokenB, tc.method, "/Groups/"+groupA, tc.body)
-		require.Equal(ts.T(), http.StatusNotFound, w.Code, tc.method)
+		ts.expectAs(ts.TokenB, http.StatusNotFound, tc.method, "/Groups/"+groupA, tc.body)
 	}
 
 	got := ts.get(ts.TokenA, "/Groups/"+groupA)
@@ -177,8 +169,7 @@ func (ts *SCIMTestSuite) TestGroupsTenantIsolation() {
 		require.Equal(ts.T(), "invalidValue", body["scimType"], tc.method)
 	}
 
-	w, _ := ts.do(ts.TokenB, http.MethodDelete, "/Users/"+bobB, "")
-	require.Equal(ts.T(), http.StatusNoContent, w.Code)
+	ts.expectAs(ts.TokenB, http.StatusNoContent, http.MethodDelete, "/Users/"+bobB, "")
 	require.Equal(ts.T(), []string{aliceA}, memberValues(ts.get(ts.TokenA, "/Groups/"+groupA)))
 	require.Equal(ts.T(), []string{groupA}, pluck(ts.get(ts.TokenA, "/Users/"+aliceA)["groups"], "value"))
 }

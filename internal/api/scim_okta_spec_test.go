@@ -199,18 +199,14 @@ func (ts *SCIMTestSuite) TestOktaUserLifecycleReplay() {
 		require.Equal(ts.T(), len(expected), played)
 	})
 
-	var stored models.SCIMUser
-	require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", id).First(&stored))
-	require.NotContains(ts.T(), string(stored.Resource), "password")
+	require.NotContains(ts.T(), string(ts.storedUser(id).Resource), "password")
 	require.False(ts.T(), ts.linkedUser(id).HasPassword())
 
-	actions := []string{}
 	for _, entry := range entries {
 		payload, err := json.Marshal(entry.Payload)
 		require.NoError(ts.T(), err)
 		require.NotContains(ts.T(), string(payload), password)
-		actions = append(actions, entry.Payload["action"].(string))
 	}
 	updated := string(models.SCIMUserUpdatedAction)
-	require.Equal(ts.T(), []string{string(models.SCIMUserCreatedAction), updated, updated, updated}, actions)
+	require.Equal(ts.T(), []string{string(models.SCIMUserCreatedAction), updated, updated, updated}, actionsOf(entries))
 }

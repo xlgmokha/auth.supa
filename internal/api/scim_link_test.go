@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gofrs/uuid"
@@ -40,14 +39,8 @@ func (ts *SCIMTestSuite) ssoUser(p *models.SSOProvider, sub, email string) *mode
 	return user
 }
 
-func (ts *SCIMTestSuite) scimRow(id string) models.SCIMUser {
-	var row models.SCIMUser
-	require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", id).First(&row))
-	return row
-}
-
 func (ts *SCIMTestSuite) linkedUser(id string) *models.User {
-	row := ts.scimRow(id)
+	row := ts.storedUser(id)
 	user, err := models.FindSCIMLinkedUser(ts.API.db, &row)
 	require.NoError(ts.T(), err)
 	require.NotNil(ts.T(), user)
@@ -67,7 +60,11 @@ func (ts *SCIMTestSuite) ssoIdentity(sub string) *models.Identity {
 }
 
 func (ts *SCIMTestSuite) expect(status int, method, path, body string) map[string]any {
-	w, got := ts.do(ts.TokenA, method, path, body)
+	return ts.expectAs(ts.TokenA, status, method, path, body)
+}
+
+func (ts *SCIMTestSuite) expectAs(token string, status int, method, path, body string) map[string]any {
+	w, got := ts.do(token, method, path, body)
 	require.Equal(ts.T(), status, w.Code, w.Body.String())
 	return got
 }
@@ -124,11 +121,7 @@ func (ts *SCIMTestSuite) passkeyRegistrationOptions(user *models.User) int {
 		ChallengeExpiryDuration: 5 * time.Minute,
 	}
 
-	r := httptest.NewRequest(http.MethodPost, "/passkeys/registration/options", nil)
-	r.Header.Set("Authorization", "Bearer "+ts.accessToken(user))
-	w := httptest.NewRecorder()
-	ts.API.handler.ServeHTTP(w, r)
-	return w.Code
+	return serveBearer(ts.API, http.MethodPost, "/passkeys/registration/options", ts.accessToken(user), "").Code
 }
 
 func (ts *SCIMTestSuite) TestNonSSOUserWithSSOIdentityEmailIsNeverLinked() {
@@ -178,10 +171,7 @@ func (ts *SCIMTestSuite) TestOldEmailCannotSignInAfterEmailChange() {
 			{"/magiclink", `{"email":"` + email + `"}`},
 			{"/token?grant_type=password", `{"email":"` + email + `","password":"hunter2hunter2"}`},
 		} {
-			r := httptest.NewRequest(http.MethodPost, req.path, strings.NewReader(req.body))
-			r.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-			ts.API.handler.ServeHTTP(w, r)
+			w := serveBearer(ts.API, http.MethodPost, req.path, "", req.body)
 			require.NotContains(ts.T(), w.Body.String(), "access_token", req.path)
 
 			reloaded := ts.linkedUser(id)
@@ -305,11 +295,7 @@ func (ts *SCIMTestSuite) refreshToken(user *models.User) string {
 }
 
 func (ts *SCIMTestSuite) refresh(token string) int {
-	r := httptest.NewRequest(http.MethodPost, "/token?grant_type=refresh_token", strings.NewReader(`{"refresh_token":"`+token+`"}`))
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	ts.API.handler.ServeHTTP(w, r)
-	return w.Code
+	return serveBearer(ts.API, http.MethodPost, "/token?grant_type=refresh_token", "", `{"refresh_token":"`+token+`"}`).Code
 }
 
 func (ts *SCIMTestSuite) sessions(user *models.User) int {
@@ -470,8 +456,7 @@ func (ts *SCIMTestSuite) setActive(id string, active bool) {
 }
 
 func (ts *SCIMTestSuite) setActiveAs(token, id string, active bool) {
-	w, _ := ts.do(token, http.MethodPatch, "/Users/"+id, patchOp(`{"op": "replace", "value": {"active": `+strconv.FormatBool(active)+`}}`))
-	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
+	ts.expectAs(token, http.StatusOK, http.MethodPatch, "/Users/"+id, patchOp(`{"op": "replace", "value": {"active": `+strconv.FormatBool(active)+`}}`))
 }
 
 func (ts *SCIMTestSuite) TestReplaceDeactivatesAndReactivates() {
@@ -633,7 +618,7 @@ func (ts *SCIMTestSuite) TestReplaceRejectsRenameToTakenIdentity() {
 
 	ts.rename(id, "bob@example.com", http.StatusConflict)
 
-	require.Equal(ts.T(), "alice@example.com", ts.scimRow(id).UserName())
+	require.Equal(ts.T(), "alice@example.com", ts.storedUser(id).UserName())
 	ts.ssoIdentity("Alice@Example.com")
 }
 
@@ -647,11 +632,7 @@ func (ts *SCIMTestSuite) accessToken(user *models.User) string {
 }
 
 func (ts *SCIMTestSuite) unlink(user *models.User, identity *models.Identity) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodDelete, "/user/identities/"+identity.ID.String(), nil)
-	r.Header.Set("Authorization", "Bearer "+ts.accessToken(user))
-	w := httptest.NewRecorder()
-	ts.API.handler.ServeHTTP(w, r)
-	return w
+	return serveBearer(ts.API, http.MethodDelete, "/user/identities/"+identity.ID.String(), ts.accessToken(user), "")
 }
 
 func (ts *SCIMTestSuite) TestUnlinkRefusedForSCIMManagedIdentity() {
@@ -695,7 +676,7 @@ func (ts *SCIMTestSuite) TestRenameProvisionsWhenIdentityMissing() {
 
 	entries := ts.auditDuring(func() { ts.rename(id, "alice2@example.com", http.StatusOK) })
 
-	require.Equal(ts.T(), "alice2@example.com", ts.scimRow(id).UserName())
+	require.Equal(ts.T(), "alice2@example.com", ts.storedUser(id).UserName())
 	require.Empty(ts.T(), ts.identities(user))
 	require.Len(ts.T(), entries, 1)
 	require.Equal(ts.T(), string(models.SCIMUserUpdatedAction), entries[0].Payload["action"])
