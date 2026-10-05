@@ -86,60 +86,71 @@ func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMU
 }
 
 func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, update scim.UserUpdate) error {
-	old, row, profile := update.Old, update.Row, update.Profile
-	linked, err := models.FindSCIMLinkedUser(tx, old)
+	linked, err := models.FindSCIMLinkedUser(tx, update.Old)
 	if err != nil || linked == nil {
 		return err
 	}
-	var stored struct {
-		UserName string `json:"userName"`
-	}
-	if err := json.Unmarshal(old.Resource, &stored); err != nil {
+	if err := renameSCIMIdentity(tx, r, linked, update); err != nil {
 		return err
 	}
-	providerType := scim.ProviderType(row.SSOProviderID)
-	email := profile.Email
-	if stored.UserName != profile.UserName {
-		data := map[string]any{scim.ClaimSub: profile.UserName}
-		if email != "" {
-			data[scim.ClaimEmail] = email
-		}
-		err := models.RenameSCIMIdentity(tx, models.SCIMIdentityRename{
-			UserID:   linked.ID,
-			Provider: providerType,
-			From:     stored.UserName,
-			To:       profile.UserName,
-			Data:     data,
-		})
-		if models.IsNotFoundError(err) {
-			observability.GetLogEntry(r).Entry.WithField("user_id", linked.ID).WithField("sso_provider_id", row.SSOProviderID).Warn("scim: identity not found, rename skipped")
-		} else if err != nil {
-			return err
-		}
+	if err := changeSCIMEmail(tx, linked, update); err != nil {
+		return err
 	}
-	if email != "" && !strings.EqualFold(email, linked.GetEmail()) {
-		if err := models.ChangeSCIMIdentityEmail(tx, models.SCIMIdentityEmailChange{
-			UserID:   linked.ID,
-			Provider: providerType,
-			Subject:  profile.UserName,
-			Email:    email,
-		}); err != nil {
-			return err
-		}
-		if err := linked.SetEmail(tx, strings.ToLower(email)); err != nil {
-			return err
-		}
-		if err := linked.ClearAllPendingTokens(tx); err != nil {
-			return err
-		}
-		if err := linked.UpdateUserMetaData(tx, map[string]any{scim.ClaimEmail: email}); err != nil {
-			return err
-		}
-	}
-	if old.Active() && !row.Active() {
+	if update.Old.Active() && !update.Row.Active() {
 		return models.Logout(tx, linked.ID)
 	}
 	return nil
+}
+
+func renameSCIMIdentity(tx *storage.Connection, r *http.Request, linked *models.User, update scim.UserUpdate) error {
+	var stored struct {
+		UserName string `json:"userName"`
+	}
+	if err := json.Unmarshal(update.Old.Resource, &stored); err != nil {
+		return err
+	}
+	profile := update.Profile
+	if stored.UserName == profile.UserName {
+		return nil
+	}
+	data := map[string]any{scim.ClaimSub: profile.UserName}
+	if profile.Email != "" {
+		data[scim.ClaimEmail] = profile.Email
+	}
+	err := models.RenameSCIMIdentity(tx, models.SCIMIdentityRename{
+		UserID:   linked.ID,
+		Provider: scim.ProviderType(update.Row.SSOProviderID),
+		From:     stored.UserName,
+		To:       profile.UserName,
+		Data:     data,
+	})
+	if models.IsNotFoundError(err) {
+		observability.GetLogEntry(r).Entry.WithField("user_id", linked.ID).WithField("sso_provider_id", update.Row.SSOProviderID).Warn("scim: identity not found, rename skipped")
+		return nil
+	}
+	return err
+}
+
+func changeSCIMEmail(tx *storage.Connection, linked *models.User, update scim.UserUpdate) error {
+	email := update.Profile.Email
+	if email == "" || strings.EqualFold(email, linked.GetEmail()) {
+		return nil
+	}
+	if err := models.ChangeSCIMIdentityEmail(tx, models.SCIMIdentityEmailChange{
+		UserID:   linked.ID,
+		Provider: scim.ProviderType(update.Row.SSOProviderID),
+		Subject:  update.Profile.UserName,
+		Email:    email,
+	}); err != nil {
+		return err
+	}
+	if err := linked.SetEmail(tx, strings.ToLower(email)); err != nil {
+		return err
+	}
+	if err := linked.ClearAllPendingTokens(tx); err != nil {
+		return err
+	}
+	return linked.UpdateUserMetaData(tx, map[string]any{scim.ClaimEmail: email})
 }
 
 func (s *scimUserSync) UserDeleted(tx *storage.Connection, row *models.SCIMUser) error {

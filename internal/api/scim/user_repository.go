@@ -20,6 +20,8 @@ var userSchemas = core.Schemas{
 	core.NewSchema(core.SchemaEnterpriseUser).With(core.EnterpriseUserAttributes()...),
 }
 
+type userWrite func(*storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error)
+
 type UserRepository struct {
 	db     *storage.Connection
 	config *conf.GlobalConfiguration
@@ -121,16 +123,9 @@ func (s *UserRepository) Update(ctx context.Context, user *core.User) (*core.Use
 		if err := s.beforeProvision(r, db, target.ProviderID, user); err != nil {
 			return nil, err
 		}
+		return s.save(db, r, target.ProviderID, s.reprovision(target, resource, user))
 	}
 	return s.save(db, r, target.ProviderID, func(tx *storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error) {
-		if linked == nil {
-			row, err := models.ReplaceSCIMUser(tx, target, resource)
-			if err != nil {
-				return nil, nil, "", err
-			}
-			created, err := s.events.UserProvisioned(tx, row, newProfile(user))
-			return row, created, models.SCIMUserUpdatedAction, err
-		}
 		row, changed, err := models.ReplaceSCIMUserIfChanged(tx, target, resource)
 		if err != nil || !changed {
 			return row, nil, "", err
@@ -167,7 +162,18 @@ func (s *UserRepository) Delete(ctx context.Context, user *core.User) error {
 	}))
 }
 
-func (s *UserRepository) save(db *storage.Connection, r *http.Request, providerID uuid.UUID, write func(*storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error)) (*core.User, error) {
+func (s *UserRepository) reprovision(target models.SCIMTarget, resource []byte, user *core.User) userWrite {
+	return func(tx *storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error) {
+		row, err := models.ReplaceSCIMUser(tx, target, resource)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		created, err := s.events.UserProvisioned(tx, row, newProfile(user))
+		return row, created, models.SCIMUserUpdatedAction, err
+	}
+}
+
+func (s *UserRepository) save(db *storage.Connection, r *http.Request, providerID uuid.UUID, write userWrite) (*core.User, error) {
 	var saved *core.User
 	var created *models.User
 	err := db.Transaction(func(tx *storage.Connection) error {

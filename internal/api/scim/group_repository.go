@@ -15,6 +15,8 @@ import (
 
 var groupSchemas = core.Schemas{core.NewSchema(core.SchemaGroup).With(core.GroupAttributes()...)}
 
+type groupWrite func(*storage.Connection, []byte) (*models.SCIMGroup, models.AuditAction, error)
+
 type groupRepository struct {
 	db     *storage.Connection
 	config *conf.GlobalConfiguration
@@ -120,14 +122,10 @@ func (s *groupRepository) Delete(ctx context.Context, group *core.Group) error {
 	}))
 }
 
-func (s *groupRepository) save(ctx context.Context, group *core.Group, write func(*storage.Connection, []byte) (*models.SCIMGroup, models.AuditAction, error)) (*core.Group, error) {
-	members := make([]uuid.UUID, 0, len(group.Members))
-	for _, member := range group.Members {
-		id, err := uuid.FromString(member.Value)
-		if err != nil {
-			return nil, errMemberNotFound()
-		}
-		members = append(members, id)
+func (s *groupRepository) save(ctx context.Context, group *core.Group, write groupWrite) (*core.Group, error) {
+	members, err := memberIDs(group)
+	if err != nil {
+		return nil, err
 	}
 	resource, err := encode(&core.Group{Base: group.Base, DisplayName: group.DisplayName})
 	if err != nil {
@@ -138,21 +136,14 @@ func (s *groupRepository) save(ctx context.Context, group *core.Group, write fun
 		return nil, err
 	}
 	snapshot := groupSnapshotKey.Value(ctx)
-	tracked := snapshot.matches(group.Meta.Version)
 	var row *models.SCIMGroup
-	var change models.SCIMGroupMemberChange
 	err = s.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
-		var action models.AuditAction
-		var terr error
-		if row, action, terr = write(tx, resource); terr != nil {
+		written, action, terr := write(tx, resource)
+		if terr != nil {
 			return terr
 		}
-		if tracked {
-			row, change, terr = models.ReplaceSCIMGroupMembersFrom(tx, row, snapshot.members, members)
-		} else {
-			row, change, terr = models.ReplaceSCIMGroupMembers(tx, row, members)
-		}
-		if terr != nil {
+		var change models.SCIMGroupMemberChange
+		if row, change, terr = snapshot.replace(tx, group.Meta.Version, written, members); terr != nil {
 			return terr
 		}
 		if action == "" && change.Changed() {
@@ -235,6 +226,18 @@ func (s *groupRepository) compose(row models.SCIMGroup, members []models.SCIMGro
 		group.Members[i] = core.Member{Value: id, Ref: base + "/" + member.Type + "s/" + id, Type: core.ResourceTypeName(member.Type)}
 	}
 	return group, nil
+}
+
+func memberIDs(group *core.Group) ([]uuid.UUID, error) {
+	ids := make([]uuid.UUID, 0, len(group.Members))
+	for _, member := range group.Members {
+		id, err := uuid.FromString(member.Value)
+		if err != nil {
+			return nil, errMemberNotFound()
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func groupEvent(r *http.Request, action models.AuditAction, row *models.SCIMGroup, displayName string) auditEvent {
