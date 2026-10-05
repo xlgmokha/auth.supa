@@ -57,7 +57,7 @@ var (
 	}
 )
 
-type AuditEvent struct {
+type auditEvent struct {
 	Actor      *models.User
 	Action     models.AuditAction
 	ProviderID uuid.UUID
@@ -105,27 +105,10 @@ func NewUserRepository(db *storage.Connection, config *conf.GlobalConfiguration,
 	return &UserRepository{db: db, config: config, events: events}
 }
 
-func Audit(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, event AuditEvent) error {
+func audit(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, event auditEvent) error {
 	event.Traits["sso_provider_id"] = event.ProviderID
 	event.Traits["outcome"] = "success"
 	return models.NewAuditLogEntry(config.AuditLog, r, tx, event.Actor, event.Action, utilities.GetIPAddress(r), event.Traits)
-}
-
-func DeleteUsers(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, actor *models.User, userID uuid.UUID) error {
-	rows, err := models.SoftDeleteSCIMUsersByUserID(tx, userID)
-	if err != nil {
-		return err
-	}
-	for i := range rows {
-		if err := models.RemoveSCIMMemberFromGroups(tx, rows[i].ID); err != nil {
-			return err
-		}
-		event := AuditEvent{Actor: actor, Action: models.SCIMUserDeletedAction, ProviderID: rows[i].SSOProviderID, Traits: scimUserTraits(&rows[i], &userID)}
-		if err := Audit(config, tx, r, event); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func BaseURL(config *conf.GlobalConfiguration) string {
@@ -468,7 +451,7 @@ func (s *scimGroupRepository) Delete(ctx context.Context, group *core.Group) err
 		if err := models.RemoveSCIMMemberFromGroups(tx, row.ID); err != nil {
 			return err
 		}
-		return Audit(s.config, tx, r, scimGroupEvent(r, models.SCIMGroupDeletedAction, row, resource.DisplayName))
+		return audit(s.config, tx, r, scimGroupEvent(r, models.SCIMGroupDeletedAction, row, resource.DisplayName))
 	}))
 }
 
@@ -514,7 +497,7 @@ func (s *scimGroupRepository) save(ctx context.Context, group *core.Group, write
 		if action == "" {
 			return nil
 		}
-		return Audit(s.config, tx, r, scimGroupEvent(r, action, row, group.DisplayName))
+		return audit(s.config, tx, r, scimGroupEvent(r, action, row, group.DisplayName))
 	})
 	if err != nil {
 		return nil, Error(err)
@@ -576,9 +559,9 @@ func (s *scimGroupRepository) compose(row models.SCIMGroup, members []models.SCI
 	return group, nil
 }
 
-func scimGroupEvent(r *http.Request, action models.AuditAction, row *models.SCIMGroup, displayName string) AuditEvent {
+func scimGroupEvent(r *http.Request, action models.AuditAction, row *models.SCIMGroup, displayName string) auditEvent {
 	traits := map[string]any{"scim_group_id": row.ID, "display_name": displayName}
-	return AuditEvent{Actor: scimActor(r), Action: action, ProviderID: row.SSOProviderID, Traits: traits}
+	return auditEvent{Actor: scimActor(r), Action: action, ProviderID: row.SSOProviderID, Traits: traits}
 }
 
 type UserRepository struct {
@@ -720,7 +703,7 @@ func (s *UserRepository) Delete(ctx context.Context, user *core.User) error {
 		if err != nil {
 			return err
 		}
-		return Audit(s.config, tx, r, event)
+		return audit(s.config, tx, r, event)
 	}))
 }
 
@@ -738,7 +721,7 @@ func (s *UserRepository) save(db *storage.Connection, r *http.Request, providerI
 			if terr != nil {
 				return terr
 			}
-			if terr = Audit(s.config, tx, r, event); terr != nil {
+			if terr = audit(s.config, tx, r, event); terr != nil {
 				return terr
 			}
 		}
@@ -856,16 +839,16 @@ func IdentityData(user *core.User) map[string]any {
 	}
 }
 
-func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditAction, row *models.SCIMUser) (AuditEvent, error) {
+func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditAction, row *models.SCIMUser) (auditEvent, error) {
 	linked, err := models.FindSCIMLinkedUser(tx, row)
 	if err != nil {
-		return AuditEvent{}, err
+		return auditEvent{}, err
 	}
 	var userID *uuid.UUID
 	if linked != nil {
 		userID = &linked.ID
 	}
-	return AuditEvent{Actor: scimActor(r), Action: action, ProviderID: row.SSOProviderID, Traits: scimUserTraits(row, userID)}, nil
+	return auditEvent{Actor: scimActor(r), Action: action, ProviderID: row.SSOProviderID, Traits: scimUserTraits(row, userID)}, nil
 }
 
 func scimUserTraits(row *models.SCIMUser, userID *uuid.UUID) map[string]any {

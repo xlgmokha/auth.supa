@@ -1,13 +1,11 @@
 package api
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/gofrs/uuid"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/models"
@@ -49,25 +47,16 @@ func (a *API) adminSCIMDisable(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *API) setSCIM(w http.ResponseWriter, r *http.Request, enabled bool) error {
-	set, action, verb := models.DisableSCIM, models.SCIMDisabledAction, "disabling"
+	verb := "disabling"
 	if enabled {
-		set, action, verb = models.EnableSCIM, models.SCIMEnabledAction, "enabling"
+		verb = "enabling"
 	}
 	ctx := r.Context()
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
 	if err := db.Transaction(func(tx *storage.Connection) error {
-		changed, err := set(tx, provider.ID)
-		if err != nil || !changed {
-			return err
-		}
-		return scim.Audit(a.config, tx, r, scim.AuditEvent{
-			Actor:      getAdminUser(ctx),
-			Action:     action,
-			ProviderID: provider.ID,
-			Traits:     map[string]any{},
-		})
+		return scim.SetEnabled(a.config, tx, r, getAdminUser(ctx), provider.ID, enabled)
 	}); err != nil {
 		return apierrors.NewInternalServerError("Error %s SCIM", verb).WithInternalError(err)
 	}
@@ -91,10 +80,8 @@ func (a *API) adminSCIMTokensCreate(w http.ResponseWriter, r *http.Request) erro
 	var plaintext string
 	err := db.Transaction(func(tx *storage.Connection) error {
 		var terr error
-		if token, plaintext, terr = models.CreateSCIMToken(tx, provider, params.ExpiresAt); terr != nil {
-			return terr
-		}
-		return scim.Audit(a.config, tx, r, scimTokenEvent(r, models.SCIMTokenCreatedAction, token))
+		token, plaintext, terr = scim.CreateToken(a.config, tx, r, getAdminUser(ctx), provider, params.ExpiresAt)
+		return terr
 	})
 	if err != nil {
 		if errors.Is(err, models.ErrSCIMTokenExpiry) {
@@ -129,12 +116,9 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 
 	var token *models.SCIMToken
 	err := db.Transaction(func(tx *storage.Connection) error {
-		var revoked bool
 		var terr error
-		if token, revoked, terr = revokeSCIMToken(tx, provider.ID, chi.URLParam(r, "token_id")); terr != nil || !revoked {
-			return terr
-		}
-		return scim.Audit(a.config, tx, r, scimTokenEvent(r, models.SCIMTokenRevokedAction, token))
+		token, terr = scim.RevokeToken(a.config, tx, r, getAdminUser(ctx), provider.ID, chi.URLParam(r, "token_id"))
+		return terr
 	})
 	if err != nil {
 		if models.IsNotFoundError(err) {
@@ -144,34 +128,6 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	}
 
 	return sendJSON(w, http.StatusOK, token)
-}
-
-func revokeSCIMToken(tx *storage.Connection, providerID uuid.UUID, tokenID string) (*models.SCIMToken, bool, error) {
-	id, err := uuid.FromString(tokenID)
-	if err != nil {
-		return nil, false, models.SCIMNotFoundError{}
-	}
-	token, err := models.FindSCIMToken(tx, providerID, id)
-	if err != nil || token.IsRevoked() {
-		return token, false, err
-	}
-	if err := token.Revoke(tx); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			token, err = models.FindSCIMToken(tx, providerID, id)
-			return token, false, err
-		}
-		return nil, false, err
-	}
-	return token, true, nil
-}
-
-func scimTokenEvent(r *http.Request, action models.AuditAction, token *models.SCIMToken) scim.AuditEvent {
-	return scim.AuditEvent{
-		Actor:      getAdminUser(r.Context()),
-		Action:     action,
-		ProviderID: token.SSOProviderID,
-		Traits:     map[string]any{"token_id": token.ID, "token_prefix": token.Prefix, "expires_at": token.ExpiresAt},
-	}
 }
 
 func (a *API) sendSCIMStatus(w http.ResponseWriter, db *storage.Connection, provider *models.SSOProvider) error {
@@ -190,29 +146,5 @@ func (a *API) sendSCIMStatus(w http.ResponseWriter, db *storage.Connection, prov
 		Enabled: enabled,
 		BaseURL: scim.BaseURL(a.config),
 		Tokens:  tokens,
-	})
-}
-
-func (a *API) deprovisionSCIM(tx *storage.Connection, r *http.Request, provider *models.SSOProvider) error {
-	if !a.config.SSO.SCIM.Enabled {
-		return nil
-	}
-	enabled, err := models.IsSCIMEnabled(tx, provider.ID)
-	if err != nil || !enabled {
-		return err
-	}
-	tokens, err := models.FindActiveSCIMTokensBySSOProvider(tx, provider.ID)
-	if err != nil {
-		return err
-	}
-	prefixes := make([]string, len(tokens))
-	for i, token := range tokens {
-		prefixes[i] = token.Prefix
-	}
-	return scim.Audit(a.config, tx, r, scim.AuditEvent{
-		Actor:      getAdminUser(r.Context()),
-		Action:     models.SCIMDisabledAction,
-		ProviderID: provider.ID,
-		Traits:     map[string]any{"token_prefixes": prefixes},
 	})
 }
