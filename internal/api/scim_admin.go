@@ -86,7 +86,15 @@ func (a *API) adminSCIMTokensCreate(w http.ResponseWriter, r *http.Request) erro
 		}
 	}
 
-	token, plaintext, err := models.CreateSCIMToken(db, provider, params.ExpiresAt)
+	var token *models.SCIMToken
+	var plaintext string
+	err := db.Transaction(func(tx *storage.Connection) error {
+		var terr error
+		if token, plaintext, terr = models.CreateSCIMToken(tx, provider, params.ExpiresAt); terr != nil {
+			return terr
+		}
+		return auditSCIM(a.config, tx, r, scimTokenEvent(r, models.SCIMTokenCreatedAction, token))
+	})
 	if err != nil {
 		if errors.Is(err, models.ErrSCIMTokenExpiry) {
 			return apierrors.NewBadRequestError(apierrors.ErrorCodeValidationFailed, "expires_at must be in the future")
@@ -118,7 +126,15 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
-	token, err := revokeSCIMToken(db, provider.ID, chi.URLParam(r, "token_id"))
+	var token *models.SCIMToken
+	err := db.Transaction(func(tx *storage.Connection) error {
+		var revoked bool
+		var terr error
+		if token, revoked, terr = revokeSCIMToken(tx, provider.ID, chi.URLParam(r, "token_id")); terr != nil || !revoked {
+			return terr
+		}
+		return auditSCIM(a.config, tx, r, scimTokenEvent(r, models.SCIMTokenRevokedAction, token))
+	})
 	if err != nil {
 		if models.IsNotFoundError(err) {
 			return apierrors.NewNotFoundError(apierrors.ErrorCodeSCIMTokenNotFound, "SCIM token not found")
@@ -129,25 +145,32 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	return sendJSON(w, http.StatusOK, token)
 }
 
-func revokeSCIMToken(tx *storage.Connection, providerID uuid.UUID, tokenID string) (*models.SCIMToken, error) {
+func revokeSCIMToken(tx *storage.Connection, providerID uuid.UUID, tokenID string) (*models.SCIMToken, bool, error) {
 	id, err := uuid.FromString(tokenID)
 	if err != nil {
-		return nil, models.SCIMNotFoundError{}
+		return nil, false, models.SCIMNotFoundError{}
 	}
 	token, err := models.FindSCIMToken(tx, providerID, id)
-	if err != nil {
-		return nil, err
-	}
-	if token.IsRevoked() {
-		return token, nil
+	if err != nil || token.IsRevoked() {
+		return token, false, err
 	}
 	if err := token.Revoke(tx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return models.FindSCIMToken(tx, providerID, id)
+			token, err = models.FindSCIMToken(tx, providerID, id)
+			return token, false, err
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return token, nil
+	return token, true, nil
+}
+
+func scimTokenEvent(r *http.Request, action models.AuditAction, token *models.SCIMToken) scimAuditEvent {
+	return scimAuditEvent{
+		actor:      getAdminUser(r.Context()),
+		action:     action,
+		providerID: token.SSOProviderID,
+		traits:     map[string]any{"token_id": token.ID, "token_prefix": token.Prefix, "expires_at": token.ExpiresAt},
+	}
 }
 
 func (a *API) sendSCIMStatus(w http.ResponseWriter, db *storage.Connection, provider *models.SSOProvider) error {

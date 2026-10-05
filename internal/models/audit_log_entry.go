@@ -58,6 +58,8 @@ const (
 	SCIMGroupDeletedAction          AuditAction = "scim_group_deleted"
 	SCIMEnabledAction               AuditAction = "scim_enabled"
 	SCIMDisabledAction              AuditAction = "scim_disabled"
+	SCIMTokenCreatedAction          AuditAction = "scim_token_created"
+	SCIMTokenRevokedAction          AuditAction = "scim_token_revoked"
 
 	account auditLogType = "account"
 	team    auditLogType = "team"
@@ -105,6 +107,8 @@ var ActionLogTypeMap = map[AuditAction]auditLogType{
 	SCIMGroupDeletedAction:          scim,
 	SCIMEnabledAction:               scim,
 	SCIMDisabledAction:              scim,
+	SCIMTokenCreatedAction:          scim,
+	SCIMTokenRevokedAction:          scim,
 }
 
 // AuditLogEntry is the database model for audit log entries.

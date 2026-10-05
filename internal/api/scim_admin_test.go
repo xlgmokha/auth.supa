@@ -346,6 +346,11 @@ func (ts *SCIMTokensTestSuite) TestAuditLog() {
 	ts.API.config.SSO.SCIM.Enabled = true
 
 	require.Equal(ts.T(), []string{string(models.SCIMDisabledAction), string(models.SCIMEnabledAction)}, ts.scimActions(ts.Provider))
+	created, revoked := string(models.SCIMTokenCreatedAction), string(models.SCIMTokenRevokedAction)
+	require.Equal(ts.T(), []string{created, created, revoked, revoked}, ts.tokenActions(ts.Provider))
+	entries := queryAuditEntries(ts.T(), ts.API.db, "payload->>'action' = ? AND payload->'traits'->>'token_id' = ?", revoked, first.ID.String())
+	require.Len(ts.T(), entries, 1)
+	require.Equal(ts.T(), first.Prefix, entries[0].Payload["traits"].(map[string]any)["token_prefix"])
 }
 
 func (ts *SCIMTokensTestSuite) TestDisableNeverEnabledWritesNoEvent() {
@@ -414,8 +419,19 @@ func (ts *SCIMTokensTestSuite) expectStatus(method string, provider *models.SSOP
 }
 
 func (ts *SCIMTokensTestSuite) scimActions(provider *models.SSOProvider) []string {
+	return ts.auditActions(provider, models.SCIMEnabledAction, models.SCIMDisabledAction)
+}
+
+func (ts *SCIMTokensTestSuite) tokenActions(provider *models.SSOProvider) []string {
+	return ts.auditActions(provider, models.SCIMTokenCreatedAction, models.SCIMTokenRevokedAction)
+}
+
+func (ts *SCIMTokensTestSuite) auditActions(provider *models.SSOProvider, kinds ...models.AuditAction) []string {
 	actions := []string{}
 	for _, entry := range queryAuditEntries(ts.T(), ts.API.db, "payload->>'log_type' = ?", "scim") {
+		if !slices.Contains(kinds, models.AuditAction(entry.Payload["action"].(string))) {
+			continue
+		}
 		traits := entry.Payload["traits"].(map[string]any)
 		require.Equal(ts.T(), "supabase_admin", entry.Payload["actor_username"])
 		require.Equal(ts.T(), provider.ID.String(), traits["sso_provider_id"])
