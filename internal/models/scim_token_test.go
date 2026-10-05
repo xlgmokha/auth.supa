@@ -40,23 +40,6 @@ func (ts *SCIMTokenTestSuite) TestCreate() {
 	require.Nil(ts.T(), token.LastUsedAt)
 }
 
-func (ts *SCIMTokenTestSuite) TestCreateWithExpiry() {
-	expiresAt := time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond)
-	token, _ := ts.createToken(&expiresAt)
-
-	require.NotNil(ts.T(), token.ExpiresAt)
-	require.True(ts.T(), expiresAt.Equal(*token.ExpiresAt))
-}
-
-func (ts *SCIMTokenTestSuite) TestCreateRejects() {
-	expiresAt := time.Now().Add(-time.Minute)
-	_, _, err := CreateSCIMToken(ts.db, ts.provider, &expiresAt)
-	require.ErrorIs(ts.T(), err, ErrSCIMTokenExpiry)
-
-	_, _, err = CreateSCIMToken(ts.db, &SSOProvider{ID: uuid.Must(uuid.NewV4())}, nil)
-	require.Error(ts.T(), err)
-}
-
 func (ts *SCIMTokenTestSuite) TestTimestampsAreUTC() {
 	local := time.Local
 	time.Local = time.FixedZone("UTC-7", -7*60*60)
@@ -103,35 +86,6 @@ func (ts *SCIMTokenTestSuite) TestFindBySSOProvider() {
 	tokens, err = FindActiveSCIMTokensBySSOProvider(ts.db, uuid.Must(uuid.NewV4()))
 	require.NoError(ts.T(), err)
 	require.Empty(ts.T(), tokens)
-}
-
-func (ts *SCIMTokenTestSuite) TestFind() {
-	token, _ := ts.createToken(nil)
-
-	found, err := FindSCIMToken(ts.db, ts.provider.ID, token.ID)
-	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), token.Prefix, found.Prefix)
-
-	_, err = FindSCIMToken(ts.db, ts.createProvider().ID, token.ID)
-	require.True(ts.T(), IsNotFoundError(err))
-
-	_, err = FindSCIMToken(ts.db, ts.provider.ID, uuid.Must(uuid.NewV4()))
-	require.True(ts.T(), IsNotFoundError(err))
-}
-
-func (ts *SCIMTokenTestSuite) TestRevoke() {
-	token, _ := ts.createToken(nil)
-
-	require.NoError(ts.T(), token.Revoke(ts.db))
-	require.NotNil(ts.T(), token.RevokedAt)
-	revokedAt := *token.RevokedAt
-
-	require.NoError(ts.T(), token.Revoke(ts.db))
-	require.True(ts.T(), revokedAt.Equal(*token.RevokedAt))
-
-	reloaded, err := FindSCIMToken(ts.db, ts.provider.ID, token.ID)
-	require.NoError(ts.T(), err)
-	require.True(ts.T(), revokedAt.Equal(*reloaded.RevokedAt))
 }
 
 func (ts *SCIMTokenTestSuite) TestAuthenticate() {

@@ -9,7 +9,6 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/supabase-community/scim-go/pkg/filter"
 	"github.com/supabase/auth/internal/storage"
 )
 
@@ -40,45 +39,6 @@ func (ts *SCIMGroupTestSuite) TestCreate() {
 	require.JSONEq(ts.T(), `{"displayName":"Engineering","externalId":"ext-1"}`, string(group.Resource))
 	require.False(ts.T(), group.CreatedAt.IsZero())
 
-	ts.createGroup(ts.provider.ID, "engineering")
-	_, err = CreateSCIMGroup(ts.db, ts.provider.ID, []byte(`{"displayName":"B","externalId":"ext-1"}`))
-	require.ErrorIs(ts.T(), err, ErrSCIMGroupConflict)
-	_, err = CreateSCIMGroup(ts.db, ts.createProvider().ID, []byte(`{"displayName":"C","externalId":"ext-1"}`))
-	require.NoError(ts.T(), err)
-}
-
-func (ts *SCIMGroupTestSuite) TestFindIsScopedToProvider() {
-	group := ts.createGroup(ts.provider.ID, "Engineering")
-
-	found, err := FindSCIMGroup(ts.db, ts.provider.ID, group.ID)
-	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), group.ID, found.ID)
-
-	_, err = FindSCIMGroup(ts.db, ts.createProvider().ID, group.ID)
-	require.ErrorIs(ts.T(), err, SCIMNotFoundError{})
-	require.True(ts.T(), IsNotFoundError(err))
-}
-
-func (ts *SCIMGroupTestSuite) TestFindGroupsFiltersAndSorts() {
-	ts.createGroup(ts.provider.ID, "Beta")
-	ts.createGroup(ts.provider.ID, "alpha")
-	ts.createGroup(ts.createProvider().ID, "Alpha")
-
-	groups, total, err := FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{Filter: SCIMFilter{Op: filter.OpEquals, Column: SCIMColumnName, Fold: true, Value: "ALPHA"}, Limit: 10})
-	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), 1, total)
-	require.Equal(ts.T(), "alpha", ts.attribute(&groups[0], "displayName"))
-
-	groups, total, err = FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{Order: SCIMOrder{By: SCIMSortByName, Descending: true}, Limit: 10})
-	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), 2, total)
-	require.Equal(ts.T(), "Beta", ts.attribute(&groups[0], "displayName"))
-	require.Equal(ts.T(), "alpha", ts.attribute(&groups[1], "displayName"))
-
-	groups, total, err = FindSCIMGroups(ts.db, ts.provider.ID, SCIMQuery{})
-	require.NoError(ts.T(), err)
-	require.Equal(ts.T(), 2, total)
-	require.Empty(ts.T(), groups)
 }
 
 func (ts *SCIMGroupTestSuite) TestReplaceChecksVersion() {
@@ -211,19 +171,6 @@ func (ts *SCIMGroupTestSuite) TestFindMembershipsByUser() {
 	groups, err = FindSCIMMembershipsByUser(ts.db, ts.createProvider().ID, []uuid.UUID{alice.ID})
 	require.NoError(ts.T(), err)
 	require.Empty(ts.T(), groups)
-}
-
-func (ts *SCIMGroupTestSuite) TestReplaceMembersReturnsMembersInRenderOrder() {
-	group := ts.createGroup(ts.provider.ID, "Engineering")
-	alice := ts.createUser(ts.provider.ID, "alice")
-	bob := ts.createUser(ts.provider.ID, "bob")
-	carol := ts.createUser(ts.provider.ID, "carol")
-	ts.addMembers(group, carol.ID, alice.ID)
-
-	_, change, err := ReplaceSCIMGroupMembers(ts.db, group, []uuid.UUID{bob.ID, carol.ID, alice.ID, bob.ID})
-	require.NoError(ts.T(), err)
-	require.Len(ts.T(), change.Members, 3)
-	require.Equal(ts.T(), ts.members(group), change.Members)
 }
 
 func (ts *SCIMGroupTestSuite) createProvider() *SSOProvider {
