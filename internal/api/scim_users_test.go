@@ -139,9 +139,7 @@ func (ts *SCIMTestSuite) TestOktaLifecycle() {
 		require.EqualValues(ts.T(), 0, ts.list(ts.TokenA, filter)["totalResults"], filter)
 	}
 
-	w, body := ts.do(ts.TokenA, http.MethodPost, "/Users", oktaUser)
-	require.Equal(ts.T(), http.StatusConflict, w.Code, w.Body.String())
-	require.Equal(ts.T(), "uniqueness", body["scimType"])
+	require.NotEqual(ts.T(), id, ts.create(ts.TokenA, oktaUser))
 	require.NotNil(ts.T(), ts.storedUser(id).DeletedAt)
 }
 
@@ -268,7 +266,7 @@ func (ts *SCIMTestSuite) TestAuditLog() {
 
 	tokens, err := models.FindSCIMTokensBySSOProvider(ts.API.db, ts.A.ID)
 	require.NoError(ts.T(), err)
-	userID := ts.storedUser(id).UserID.String()
+	userID := ts.linkedUser(id).ID.String()
 
 	actions := []string{}
 	for _, entry := range ts.scimAuditEntries() {

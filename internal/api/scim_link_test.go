@@ -3,14 +3,11 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofrs/uuid"
-	"github.com/sirupsen/logrus"
-	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/provider"
@@ -51,8 +48,10 @@ func (ts *SCIMTestSuite) scimRow(id string) models.SCIMUser {
 
 func (ts *SCIMTestSuite) linkedUser(id string) *models.User {
 	row := ts.scimRow(id)
-	require.NotNil(ts.T(), row.UserID)
-	return ts.reloadUser(*row.UserID)
+	user, err := models.FindSCIMLinkedUser(ts.API.db, &row)
+	require.NoError(ts.T(), err)
+	require.NotNil(ts.T(), user)
+	return user
 }
 
 func (ts *SCIMTestSuite) identities(user *models.User) []*models.Identity {
@@ -148,7 +147,9 @@ func (ts *SCIMTestSuite) requireNonSSOUserNeverLinked(sub string) {
 	reloaded := ts.reloadUser(password.ID)
 	require.False(ts.T(), reloaded.IsSSOUser)
 	require.Len(ts.T(), ts.identities(reloaded), 1)
-	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "user_id = ?", password.ID))
+	managed, err := models.IsSCIMManaged(ts.API.db, ts.A.ID, password.ID)
+	require.NoError(ts.T(), err)
+	require.False(ts.T(), managed)
 }
 
 func (ts *SCIMTestSuite) TestLinkAccountKeepsUserSSO() {
@@ -441,10 +442,9 @@ func (ts *SCIMTestSuite) TestLoginAndSessionRefusedWhileDeprovisioned() {
 	ts.requireDeprovisioned(err)
 	ts.requireDeprovisioned(ts.issueSession(ts.API.db, user))
 
-	ts.expect(http.StatusConflict, http.MethodPost, "/Users", oktaUser)
-	_, err = ts.samlLogin(ts.A, "Alice@Example.com", "alice@example.com")
-	ts.requireDeprovisioned(err)
-	ts.requireDeprovisioned(ts.issueSession(ts.API.db, user))
+	ts.create(ts.TokenA, oktaUser)
+	require.Equal(ts.T(), user.ID, ts.signIn("Alice@Example.com", "alice@example.com").ID)
+	require.NoError(ts.T(), ts.issueSession(ts.API.db, user))
 }
 
 func (ts *SCIMTestSuite) TestSessionRefusedForLinkedOAuthIdentityWhileDeprovisioned() {
@@ -539,24 +539,25 @@ func (ts *SCIMTestSuite) TestDeleteLogsOutWithoutBanning() {
 	require.Equal(ts.T(), http.StatusBadRequest, ts.refresh(refreshToken))
 }
 
-func (ts *SCIMTestSuite) TestCreateRefusesUserDeletedByProviderSameUserName() {
-	ts.requireCreateRefusedAfterProviderDelete(oktaUser)
+func (ts *SCIMTestSuite) TestCreateReusesUserDeletedByProviderSameUserName() {
+	ts.requireCreateReusesAfterProviderDelete(oktaUser, 1)
 }
 
-func (ts *SCIMTestSuite) TestCreateRefusesUserDeletedByProviderNewUserName() {
-	ts.requireCreateRefusedAfterProviderDelete(oktaUserWith("userName", "alice.new@example.com"))
+func (ts *SCIMTestSuite) TestCreateReusesUserDeletedByProviderNewUserName() {
+	ts.requireCreateReusesAfterProviderDelete(oktaUserWith("userName", "alice.new@example.com"), 2)
 }
 
-func (ts *SCIMTestSuite) requireCreateRefusedAfterProviderDelete(body string) {
+func (ts *SCIMTestSuite) requireCreateReusesAfterProviderDelete(body string, identities int) {
 	id := ts.create(ts.TokenA, oktaUser)
 	user := ts.linkedUser(id)
 	ts.expect(http.StatusNoContent, http.MethodDelete, "/Users/"+id, "")
 
-	require.Equal(ts.T(), "uniqueness", ts.expect(http.StatusConflict, http.MethodPost, "/Users", body)["scimType"])
-	require.False(ts.T(), ts.reloadUser(user.ID).IsBanned())
-	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "user_id = ? AND deleted_at IS NULL", user.ID))
-	require.Len(ts.T(), ts.identities(user), 1)
+	reused := ts.create(ts.TokenA, body)
+	require.NotEqual(ts.T(), id, reused)
+	require.Equal(ts.T(), user.ID, ts.linkedUser(reused).ID)
+	require.Len(ts.T(), ts.identities(user), identities)
 	require.Equal(ts.T(), 1, ts.users("alice@example.com"))
+	require.NoError(ts.T(), ts.issueSession(ts.API.db, user))
 }
 
 func (ts *SCIMTestSuite) TestCreateAfterAdminHardDeletesProviderDeletedUser() {
@@ -688,12 +689,10 @@ func (ts *SCIMTestSuite) TestUnlinkAllowedWhileSCIMFlagOff() {
 	require.Len(ts.T(), ts.identities(user), 1)
 }
 
-func (ts *SCIMTestSuite) TestRenameSkippedWhenIdentityMissing() {
+func (ts *SCIMTestSuite) TestRenameProvisionsWhenIdentityMissing() {
 	id := ts.create(ts.TokenA, oktaUser)
 	user := ts.linkedUser(id)
 	require.NoError(ts.T(), ts.API.db.Destroy(ts.ssoIdentity("Alice@Example.com")))
-	hook := logrustest.NewGlobal()
-	defer hook.Reset()
 
 	entries := ts.auditDuring(func() { ts.rename(id, "alice2@example.com", http.StatusOK) })
 
@@ -701,10 +700,7 @@ func (ts *SCIMTestSuite) TestRenameSkippedWhenIdentityMissing() {
 	require.Empty(ts.T(), ts.identities(user))
 	require.Len(ts.T(), entries, 1)
 	require.Equal(ts.T(), string(models.SCIMUserUpdatedAction), entries[0].Payload["action"])
-	warned := slices.ContainsFunc(hook.AllEntries(), func(entry *logrus.Entry) bool {
-		return entry.Level == logrus.WarnLevel && strings.Contains(entry.Message, "identity not found")
-	})
-	require.True(ts.T(), warned)
+	require.NotEqual(ts.T(), user.ID, ts.linkedUser(id).ID)
 	require.NotEqual(ts.T(), user.ID, ts.signIn("alice2@example.com", "alice@example.com").ID)
 	require.Equal(ts.T(), 2, ts.users("alice@example.com"))
 }

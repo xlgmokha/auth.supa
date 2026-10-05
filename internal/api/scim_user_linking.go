@@ -94,21 +94,16 @@ func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMU
 	default:
 		return nil, apierrors.NewInternalServerError("Unknown automatic linking decision: %v", decision.Decision)
 	}
-	if created != nil {
-		err = models.LinkNewSCIMUser(tx, row, linked.ID)
-	} else {
-		err = models.LinkSCIMUser(tx, row, linked.ID)
+	if !row.Active {
+		return created, models.Logout(tx, linked.ID)
 	}
-	if err == nil && !row.Active {
-		err = models.Logout(tx, linked.ID)
-	}
-	return created, err
+	return created, nil
 }
 
 func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, update scimUserUpdate) error {
 	old, row, user := update.old, update.row, update.user
-	linked, err := models.FindUserByID(tx, *old.UserID)
-	if err != nil {
+	linked, err := models.FindSCIMLinkedUser(tx, old)
+	if err != nil || linked == nil {
 		return err
 	}
 	var stored struct {
@@ -163,10 +158,11 @@ func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, upda
 }
 
 func (s *scimUserSync) UserDeleted(tx *storage.Connection, row *models.SCIMUser) error {
-	if row.UserID == nil {
-		return nil
+	linked, err := models.FindSCIMLinkedUser(tx, row)
+	if err != nil || linked == nil {
+		return err
 	}
-	return models.Logout(tx, *row.UserID)
+	return models.Logout(tx, linked.ID)
 }
 
 func (s *scimUserSync) AfterUserProvisioned(r *http.Request, db *storage.Connection, created *models.User) {

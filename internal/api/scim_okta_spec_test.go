@@ -202,7 +202,7 @@ func (ts *SCIMTestSuite) TestOktaUserLifecycleReplay() {
 	var stored models.SCIMUser
 	require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", id).First(&stored))
 	require.NotContains(ts.T(), string(stored.Resource), "password")
-	require.False(ts.T(), ts.reloadUser(*stored.UserID).HasPassword())
+	require.False(ts.T(), ts.linkedUser(id).HasPassword())
 
 	actions := []string{}
 	for _, entry := range entries {

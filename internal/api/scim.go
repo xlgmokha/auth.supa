@@ -120,7 +120,7 @@ func (a *API) deleteSCIMUsers(tx *storage.Connection, r *http.Request, actor *mo
 		if err := models.RemoveSCIMUserFromGroups(tx, rows[i].ID); err != nil {
 			return err
 		}
-		event := scimAuditEvent{actor: actor, action: models.SCIMUserDeletedAction, providerID: rows[i].SSOProviderID, traits: scimUserTraits(&rows[i])}
+		event := scimAuditEvent{actor: actor, action: models.SCIMUserDeletedAction, providerID: rows[i].SSOProviderID, traits: scimUserTraits(&rows[i], &userID)}
 		if err := auditSCIM(a.config, tx, r, event); err != nil {
 			return err
 		}
@@ -663,13 +663,17 @@ func (s *scimUserRepository) Update(ctx context.Context, user *core.User) (*core
 	if err != nil {
 		return nil, scimError(err)
 	}
-	if existing.UserID == nil {
+	linked, err := models.FindSCIMLinkedUser(db, existing)
+	if err != nil {
+		return nil, scimError(err)
+	}
+	if linked == nil {
 		if err := s.beforeProvision(r, db, target.ProviderID, user); err != nil {
 			return nil, err
 		}
 	}
 	return s.save(db, r, target.ProviderID, func(tx *storage.Connection) (*models.SCIMUser, *models.User, models.AuditAction, error) {
-		if existing.UserID == nil {
+		if linked == nil {
 			row, err := models.ReplaceSCIMUser(tx, target, resource)
 			if err != nil {
 				return nil, nil, "", err
@@ -705,7 +709,11 @@ func (s *scimUserRepository) Delete(ctx context.Context, user *core.User) error 
 		if err := models.RemoveSCIMUserFromGroups(tx, row.ID); err != nil {
 			return err
 		}
-		return auditSCIM(s.config, tx, r, scimAuditEvent{actor: scimActor(r), action: models.SCIMUserDeletedAction, providerID: row.SSOProviderID, traits: scimUserTraits(row)})
+		event, err := scimUserEvent(tx, r, models.SCIMUserDeletedAction, row)
+		if err != nil {
+			return err
+		}
+		return auditSCIM(s.config, tx, r, event)
 	}))
 }
 
@@ -719,7 +727,10 @@ func (s *scimUserRepository) save(db *storage.Connection, r *http.Request, provi
 		}
 		created = user
 		if action != "" {
-			event := scimAuditEvent{actor: scimActor(r), action: action, providerID: row.SSOProviderID, traits: scimUserTraits(row)}
+			event, terr := scimUserEvent(tx, r, action, row)
+			if terr != nil {
+				return terr
+			}
 			if terr = auditSCIM(s.config, tx, r, event); terr != nil {
 				return terr
 			}
@@ -837,14 +848,26 @@ func scimIdentityData(user *core.User) map[string]any {
 	}
 }
 
-func scimUserTraits(row *models.SCIMUser) map[string]any {
+func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditAction, row *models.SCIMUser) (scimAuditEvent, error) {
+	linked, err := models.FindSCIMLinkedUser(tx, row)
+	if err != nil {
+		return scimAuditEvent{}, err
+	}
+	var userID *uuid.UUID
+	if linked != nil {
+		userID = &linked.ID
+	}
+	return scimAuditEvent{actor: scimActor(r), action: action, providerID: row.SSOProviderID, traits: scimUserTraits(row, userID)}, nil
+}
+
+func scimUserTraits(row *models.SCIMUser, userID *uuid.UUID) map[string]any {
 	traits := map[string]any{
 		"scim_user_id": row.ID,
 		"user_name":    row.UserName,
 		"active":       row.Active,
 	}
-	if row.UserID != nil {
-		traits["user_id"] = *row.UserID
+	if userID != nil {
+		traits["user_id"] = *userID
 	}
 	return traits
 }
