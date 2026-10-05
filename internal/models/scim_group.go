@@ -179,17 +179,13 @@ func (g SCIMGroup) Members() ([]SCIMGroupMembership, error) {
 }
 
 func scimGroupMemberIDs(group *SCIMGroup) ([]uuid.UUID, error) {
-	var resource struct {
-		Members []struct {
-			Value uuid.UUID `json:"value"`
-		} `json:"members"`
+	members, err := group.Members()
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(group.Resource, &resource); err != nil {
-		return nil, errors.Wrap(err, "error decoding SCIM group members")
-	}
-	ids := make([]uuid.UUID, len(resource.Members))
-	for i, member := range resource.Members {
-		ids[i] = member.Value
+	ids := make([]uuid.UUID, len(members))
+	for i, member := range members {
+		ids[i] = member.SCIMUserID
 	}
 	return sortedUniqueUUIDs(ids), nil
 }

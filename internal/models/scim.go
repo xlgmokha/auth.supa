@@ -197,9 +197,6 @@ func scimPath(function string, keys []string) (string, []any) {
 }
 
 func (t scimTable) join(terms []SCIMFilter, operator string) (string, []any, error) {
-	if len(terms) == 0 {
-		return "", nil, nil
-	}
 	clauses, args := make([]string, len(terms)), []any{}
 	for i, term := range terms {
 		clause, values, err := t.filter(term)
@@ -278,11 +275,10 @@ func findSCIMPage[T any](tx *storage.Connection, table scimTable, providerID uui
 
 func createSCIMRow[T any](tx *storage.Connection, table scimTable, providerID uuid.UUID, resource []byte) (*T, error) {
 	row := new(T)
-	query, args := "INSERT INTO %q (id, sso_provider_id, resource) VALUES (?, ?, ?::jsonb) RETURNING %s", []any{uuid.Must(uuid.NewV4()), providerID, string(resource)}
-	if table.resourceType != "" {
-		query, args = "INSERT INTO %q (id, sso_provider_id, resource, resource_type) VALUES (?, ?, ?::jsonb, ?) RETURNING %s", append(args, table.resourceType)
-	}
-	if err := tx.RawQuery(fmt.Sprintf(query, table.tableName, table.columns), args...).First(row); err != nil {
+	if err := tx.RawQuery(
+		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource, resource_type) VALUES (?, ?, ?::jsonb, ?) RETURNING %s", table.tableName, table.columns),
+		uuid.Must(uuid.NewV4()), providerID, string(resource), table.resourceType,
+	).First(row); err != nil {
 		return nil, table.wrapError(err, "creating")
 	}
 	return row, nil
