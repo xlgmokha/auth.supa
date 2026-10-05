@@ -58,8 +58,8 @@ const (
 	SCIMGroupDeletedAction          AuditAction = "scim_group_deleted"
 	SCIMEnabledAction               AuditAction = "scim_enabled"
 	SCIMDisabledAction              AuditAction = "scim_disabled"
-	SCIMTokenCreatedAction          AuditAction = "scim_token_created"
-	SCIMTokenRevokedAction          AuditAction = "scim_token_revoked"
+	SCIMTokenCreatedAction          AuditAction = "scim_token_created" // #nosec G101
+	SCIMTokenRevokedAction          AuditAction = "scim_token_revoked" // #nosec G101
 
 	account auditLogType = "account"
 	team    auditLogType = "team"
