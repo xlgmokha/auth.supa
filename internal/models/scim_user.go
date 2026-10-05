@@ -1,7 +1,6 @@
 package models
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,11 +26,15 @@ func (SCIMUser) TableName() string {
 }
 
 func (u SCIMUser) UserName() string {
+	return strings.ToLower(u.subject())
+}
+
+func (u SCIMUser) subject() string {
 	var resource struct {
 		UserName string `json:"userName"`
 	}
 	_ = json.Unmarshal(u.Resource, &resource)
-	return strings.ToLower(resource.UserName)
+	return resource.UserName
 }
 
 func (u SCIMUser) Active() bool {
@@ -85,12 +88,12 @@ func DeleteSCIMUser(tx *storage.Connection, target SCIMTarget) (*SCIMUser, error
 const scimUserLink = "s.resource_type = 'User' AND s.sso_provider_id = CASE WHEN i.provider ~ '^sso:[0-9a-fA-F-]{36}$' THEN substr(i.provider, 5)::uuid END AND lower(s.resource->>'userName') COLLATE \"C\" = lower(i.provider_id) AND i.user_id = ?"
 
 func FindSCIMLinkedUser(tx *storage.Connection, row *SCIMUser) (*User, error) {
-	identity := &Identity{}
-	if err := tx.Q().Where("provider = ? AND lower(provider_id) = ?", "sso:"+row.SSOProviderID.String(), row.UserName()).First(identity); err != nil {
-		if errors.Cause(err) == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, errors.Wrap(err, "error finding SCIM user identity")
+	identity, err := FindIdentityByIdAndProvider(tx, row.subject(), "sso:"+row.SSOProviderID.String())
+	if IsNotFoundError(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return FindUserByID(tx, identity.UserID)
 }
