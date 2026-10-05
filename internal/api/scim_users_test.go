@@ -99,7 +99,7 @@ func (ts *SCIMTestSuite) TestOktaLifecycle() {
 
 	stored := ts.storedUser(id)
 	require.Equal(ts.T(), ts.A.ID, stored.SSOProviderID)
-	require.Equal(ts.T(), "alice@example.com", stored.UserName)
+	require.Equal(ts.T(), "alice@example.com", stored.UserName())
 	require.NotContains(ts.T(), string(stored.Resource), "hunter2")
 	require.NotContains(ts.T(), string(stored.Resource), `"id"`)
 
@@ -121,7 +121,7 @@ func (ts *SCIMTestSuite) TestOktaLifecycle() {
 	w, patched := ts.do(ts.TokenA, http.MethodPatch, "/Users/"+id, patchOp(`{"op": "replace", "value": {"active": false}}`))
 	require.Equal(ts.T(), http.StatusOK, w.Code, w.Body.String())
 	require.Equal(ts.T(), false, patched["active"])
-	require.False(ts.T(), ts.storedUser(id).Active)
+	require.False(ts.T(), ts.storedUser(id).Active())
 
 	w, _ = ts.do(ts.TokenA, http.MethodDelete, "/Users/"+id, "")
 	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())

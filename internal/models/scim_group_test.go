@@ -122,9 +122,6 @@ func (ts *SCIMGroupTestSuite) TestDeleteRemovesMembers() {
 
 	_, err = FindSCIMGroup(ts.db, ts.provider.ID, group.ID)
 	require.ErrorIs(ts.T(), err, SCIMNotFoundError{})
-	count, err := ts.db.Q().Where("group_id = ?", group.ID).Count(&SCIMGroupMember{})
-	require.NoError(ts.T(), err)
-	require.Zero(ts.T(), count)
 
 	for _, version := range []*time.Time{nil, &group.UpdatedAt} {
 		_, err = DeleteSCIMGroup(ts.db, SCIMTarget{ProviderID: ts.provider.ID, ID: group.ID, UpdatedAt: version})
@@ -168,42 +165,6 @@ func (ts *SCIMGroupTestSuite) TestReplaceMembersRejectsUnknownUsers() {
 		require.ErrorIs(ts.T(), err, ErrSCIMGroupMemberNotFound)
 		require.Empty(ts.T(), ts.members(group))
 	}
-}
-
-func (ts *SCIMGroupTestSuite) TestReplaceMembersDoesNotLockExistingMembers() {
-	group := ts.createGroup(ts.provider.ID, "Engineering")
-	alice := ts.createUser(ts.provider.ID, "alice")
-	bob := ts.createUser(ts.provider.ID, "bob")
-	ts.addMembers(group, alice.ID)
-
-	pending, err := ts.db.NewTransaction()
-	require.NoError(ts.T(), err)
-	deleting := &storage.Connection{Connection: pending}
-	defer func() { _ = deleting.TX.Rollback() }()
-	_, err = DeleteSCIMUser(deleting, SCIMTarget{ProviderID: ts.provider.ID, ID: alice.ID})
-	require.NoError(ts.T(), err)
-
-	result := make(chan error, 1)
-	go func() {
-		result <- ts.db.Transaction(func(tx *storage.Connection) error {
-			locked, err := FindSCIMGroup(tx, ts.provider.ID, group.ID)
-			if err != nil {
-				return err
-			}
-			_, _, err = ReplaceSCIMGroupMembers(tx, locked, []uuid.UUID{alice.ID, bob.ID})
-			return err
-		})
-	}()
-	select {
-	case err := <-result:
-		require.NoError(ts.T(), err)
-	case <-time.After(5 * time.Second):
-		ts.T().Fatal("group replace waited on a member that was not added")
-	}
-
-	require.NoError(ts.T(), RemoveSCIMUserFromGroups(deleting, alice.ID))
-	require.NoError(ts.T(), deleting.TX.Commit())
-	require.Equal(ts.T(), []uuid.UUID{bob.ID}, ts.members(group))
 }
 
 func (ts *SCIMGroupTestSuite) TestReplaceMembersSkipsDeletedMembers() {

@@ -73,6 +73,7 @@ type scimTable struct {
 	columns        string
 	nameColumn     string
 	externalColumn string
+	activeColumn   string
 	stored         string
 	written        string
 	scope          string
@@ -96,9 +97,9 @@ func (t scimTable) filter(filter SCIMFilter) (string, []any, error) {
 	case filter.Attribute == SCIMAttributeExternalID:
 		return t.externalColumn + ` COLLATE "C" = ?`, []any{filter.Value}, nil
 	case filter.Attribute == SCIMAttributeActive && filter.Value == true:
-		return "active", nil, nil
+		return t.activeColumn, nil, nil
 	case filter.Attribute == SCIMAttributeActive:
-		return "NOT active", nil, nil
+		return "NOT " + t.activeColumn, nil, nil
 	case filter.Match != nil:
 		return scimMatch(filter)
 	case len(filter.Or) > 0:

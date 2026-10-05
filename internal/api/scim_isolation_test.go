@@ -122,15 +122,15 @@ func (ts *SCIMTestSuite) TestRevokedAndExpiredTokensRefusedEverywhere() {
 	}
 
 	row := ts.storedUser(user)
-	require.True(ts.T(), row.Active)
+	require.True(ts.T(), row.Active())
 	require.Nil(ts.T(), row.DeletedAt)
 	require.Contains(ts.T(), string(row.Resource), `"a-1"`)
-	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.A.ID))
+	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.A.ID))
 
 	var stored models.SCIMGroup
 	require.NoError(ts.T(), ts.API.db.Q().Where("id = ?", group).First(&stored))
 	require.Contains(ts.T(), string(stored.Resource), "Engineering")
-	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMGroup{}, "sso_provider_id = ?", ts.A.ID))
+	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMGroup{}, "sso_provider_id = ? AND resource_type = 'Group'", ts.A.ID))
 	var resource map[string]any
 	require.NoError(ts.T(), json.Unmarshal(stored.Resource, &resource))
 	require.Len(ts.T(), memberValues(resource), 1)

@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -14,30 +15,48 @@ import (
 type SCIMUser struct {
 	ID            uuid.UUID  `db:"id"`
 	SSOProviderID uuid.UUID  `db:"sso_provider_id"`
+	ResourceType  string     `db:"resource_type"`
 	Resource      []byte     `db:"resource"`
-	UserName      string     `db:"user_name"`
-	ExternalID    *string    `db:"external_id"`
-	Active        bool       `db:"active"`
 	CreatedAt     time.Time  `db:"created_at"`
 	UpdatedAt     time.Time  `db:"updated_at"`
 	DeletedAt     *time.Time `db:"deleted_at"`
 }
 
 func (SCIMUser) TableName() string {
-	return "scim_users"
+	return "scim_resources"
+}
+
+func (u SCIMUser) UserName() string {
+	var resource struct {
+		UserName string `json:"userName"`
+	}
+	_ = json.Unmarshal(u.Resource, &resource)
+	return strings.ToLower(resource.UserName)
+}
+
+func (u SCIMUser) Active() bool {
+	var resource struct {
+		Active *bool `json:"active"`
+	}
+	_ = json.Unmarshal(u.Resource, &resource)
+	return resource.Active == nil || *resource.Active
 }
 
 var scimUsersTable = scimTable{
 	tableName:      SCIMUser{}.TableName(),
+	resourceType:   "User",
 	label:          "SCIM user",
-	columns:        "id, sso_provider_id, resource, user_name, external_id, active, created_at, updated_at, deleted_at",
-	nameColumn:     "user_name",
-	externalColumn: "external_id",
+	columns:        "id, sso_provider_id, resource_type, resource, created_at, updated_at, deleted_at",
+	nameColumn:     "lower(resource->>'userName')",
+	externalColumn: "(resource->>'externalId')",
+	activeColumn:   scimUserActive,
 	stored:         "resource",
 	written:        "?::jsonb",
-	scope:          "sso_provider_id = ? AND deleted_at IS NULL",
+	scope:          "sso_provider_id = ? AND resource_type = 'User' AND deleted_at IS NULL",
 	conflict:       ErrSCIMUserConflict,
 }
+
+const scimUserActive = "coalesce((resource->>'active')::boolean, true)"
 
 func CreateSCIMUser(tx *storage.Connection, providerID uuid.UUID, resource []byte) (*SCIMUser, error) {
 	return createSCIMRow[SCIMUser](tx, scimUsersTable, providerID, resource)
@@ -63,11 +82,11 @@ func DeleteSCIMUser(tx *storage.Connection, target SCIMTarget) (*SCIMUser, error
 	return writeSCIMRow[SCIMUser](tx, scimUsersTable, target, scimWrite{verb: "deleting", sql: "UPDATE %q SET deleted_at = now(), updated_at = clock_timestamp()"})
 }
 
-const scimUserLink = "s.sso_provider_id = CASE WHEN i.provider ~ '^sso:[0-9a-fA-F-]{36}$' THEN substr(i.provider, 5)::uuid END AND s.user_name = lower(i.provider_id) AND i.user_id = ?"
+const scimUserLink = "s.resource_type = 'User' AND s.sso_provider_id = CASE WHEN i.provider ~ '^sso:[0-9a-fA-F-]{36}$' THEN substr(i.provider, 5)::uuid END AND lower(s.resource->>'userName') COLLATE \"C\" = lower(i.provider_id) AND i.user_id = ?"
 
 func FindSCIMLinkedUser(tx *storage.Connection, row *SCIMUser) (*User, error) {
 	identity := &Identity{}
-	if err := tx.Q().Where("provider = ? AND lower(provider_id) = ?", "sso:"+row.SSOProviderID.String(), row.UserName).First(identity); err != nil {
+	if err := tx.Q().Where("provider = ? AND lower(provider_id) = ?", "sso:"+row.SSOProviderID.String(), row.UserName()).First(identity); err != nil {
 		if errors.Cause(err) == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -113,7 +132,7 @@ func isSCIMUserDeprovisioned(tx *storage.Connection, where string, args ...any) 
 		Deprovisioned bool `db:"deprovisioned"`
 	}{}
 	if err := tx.RawQuery(
-		fmt.Sprintf("SELECT coalesce(bool_and(s.deleted_at IS NOT NULL OR NOT s.active), false) AS deprovisioned FROM %q s, %q i WHERE %s%s", scimUsersTable.tableName, Identity{}.TableName(), scimUserLink, where),
+		fmt.Sprintf("SELECT coalesce(bool_and(s.deleted_at IS NOT NULL OR NOT coalesce((s.resource->>'active')::boolean, true)), false) AS deprovisioned FROM %q s, %q i WHERE %s%s", scimUsersTable.tableName, Identity{}.TableName(), scimUserLink, where),
 		args...,
 	).First(&result); err != nil {
 		return false, errors.Wrap(err, "error finding SCIM user")

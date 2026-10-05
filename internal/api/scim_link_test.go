@@ -634,7 +634,7 @@ func (ts *SCIMTestSuite) TestReplaceRejectsRenameToTakenIdentity() {
 
 	ts.rename(id, "bob@example.com", http.StatusConflict)
 
-	require.Equal(ts.T(), "alice@example.com", ts.scimRow(id).UserName)
+	require.Equal(ts.T(), "alice@example.com", ts.scimRow(id).UserName())
 	ts.ssoIdentity("Alice@Example.com")
 }
 
@@ -696,7 +696,7 @@ func (ts *SCIMTestSuite) TestRenameProvisionsWhenIdentityMissing() {
 
 	entries := ts.auditDuring(func() { ts.rename(id, "alice2@example.com", http.StatusOK) })
 
-	require.Equal(ts.T(), "alice2@example.com", ts.scimRow(id).UserName)
+	require.Equal(ts.T(), "alice2@example.com", ts.scimRow(id).UserName())
 	require.Empty(ts.T(), ts.identities(user))
 	require.Len(ts.T(), entries, 1)
 	require.Equal(ts.T(), string(models.SCIMUserUpdatedAction), entries[0].Payload["action"])
@@ -713,7 +713,7 @@ func (ts *SCIMTestSuite) TestBeforeUserCreatedHook() {
 	defer func() { hook.Enabled = false }()
 
 	require.Equal(ts.T(), "signup blocked", ts.expect(http.StatusForbidden, http.MethodPost, "/Users", oktaUser)["detail"])
-	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.A.ID))
+	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.A.ID))
 
 	existing := ts.ssoUser(ts.A, "Alice@Example.com", "alice@example.com")
 	require.Equal(ts.T(), existing.ID, ts.linkedUser(ts.create(ts.TokenA, oktaUser)).ID)

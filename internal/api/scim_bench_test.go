@@ -141,7 +141,7 @@ func (s *scimBench) seedUsers(b *testing.B, prefix string, n int) []uuid.UUID {
 		ID uuid.UUID `db:"id"`
 	}{}
 	require.NoError(b, s.api.db.RawQuery(
-		`INSERT INTO scim_users (id, sso_provider_id, resource) SELECT gen_random_uuid(), ?, jsonb_build_object('schemas', jsonb_build_array('urn:ietf:params:scim:schemas:core:2.0:User'), 'userName', ? || i || '@example.com', 'active', true) FROM generate_series(1, ?) i RETURNING id`,
+		`INSERT INTO scim_resources (id, sso_provider_id, resource_type, resource) SELECT gen_random_uuid(), ?, 'User', jsonb_build_object('schemas', jsonb_build_array('urn:ietf:params:scim:schemas:core:2.0:User'), 'userName', ? || i || '@example.com', 'active', true) FROM generate_series(1, ?) i RETURNING id`,
 		s.provider, prefix, n,
 	).All(&rows))
 	ids := make([]uuid.UUID, len(rows))

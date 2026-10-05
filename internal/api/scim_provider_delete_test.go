@@ -48,10 +48,10 @@ func (ts *SCIMTestSuite) TestProviderDeleteCascadesSCIMRows() {
 	require.Equal(ts.T(), groupEvents, ts.countRows(&models.AuditLogEntry{}, "payload->>'action' LIKE 'scim_group_%'"))
 	require.False(ts.T(), ts.reloadUser(active.ID).IsBanned())
 	require.False(ts.T(), ts.reloadUser(deactivated.ID).IsBanned())
-	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.A.ID))
-	require.Zero(ts.T(), ts.countRows(&models.SCIMGroup{}, "sso_provider_id = ?", ts.A.ID))
+	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.A.ID))
+	require.Zero(ts.T(), ts.countRows(&models.SCIMGroup{}, "sso_provider_id = ? AND resource_type = 'Group'", ts.A.ID))
 	require.Zero(ts.T(), ts.countRows(&models.SCIMToken{}, "sso_provider_id = ?", ts.A.ID))
-	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.B.ID))
+	require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.B.ID))
 	w, _ := ts.do(ts.TokenB, http.MethodGet, "/Users", "")
 	require.Equal(ts.T(), http.StatusOK, w.Code)
 }
@@ -108,5 +108,5 @@ func (ts *SCIMTestSuite) TestProviderDeleteWhileSCIMFlagOff() {
 
 	require.Len(ts.T(), ts.scimAuditEntries(), before)
 	require.Empty(ts.T(), ts.auditActions(models.SCIMDisabledAction))
-	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.A.ID))
+	require.Zero(ts.T(), ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.A.ID))
 }

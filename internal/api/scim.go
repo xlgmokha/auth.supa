@@ -782,7 +782,8 @@ func (s *scimUserRepository) render(tx *storage.Connection, providerID uuid.UUID
 			Location:     base + "/Users/" + user.ID,
 			Version:      scimVersion(row.UpdatedAt),
 		}
-		user.Active = &row.Active
+		active := row.Active()
+		user.Active = &active
 		user.Schemas = []core.SchemaURI{core.SchemaUser}
 		if user.EnterpriseUser != nil {
 			user.Schemas = append(user.Schemas, core.SchemaEnterpriseUser)
@@ -860,8 +861,8 @@ func scimUserEvent(tx *storage.Connection, r *http.Request, action models.AuditA
 func scimUserTraits(row *models.SCIMUser, userID *uuid.UUID) map[string]any {
 	traits := map[string]any{
 		"scim_user_id": row.ID,
-		"user_name":    row.UserName,
-		"active":       row.Active,
+		"user_name":    row.UserName(),
+		"active":       row.Active(),
 	}
 	if userID != nil {
 		traits["user_id"] = *userID

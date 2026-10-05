@@ -194,7 +194,7 @@ func (ts *SCIMTestSuite) TestOktaUserLifecycleReplay() {
 			require.NotEqual(ts.T(), version, current, step)
 			version = current
 
-			require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ?", ts.A.ID), step)
+			require.Equal(ts.T(), 1, ts.countRows(&models.SCIMUser{}, "sso_provider_id = ? AND resource_type = 'User'", ts.A.ID), step)
 		})
 		require.Equal(ts.T(), len(expected), played)
 	})

@@ -94,7 +94,7 @@ func (s *scimUserSync) UserProvisioned(tx *storage.Connection, row *models.SCIMU
 	default:
 		return nil, apierrors.NewInternalServerError("Unknown automatic linking decision: %v", decision.Decision)
 	}
-	if !row.Active {
+	if !row.Active() {
 		return created, models.Logout(tx, linked.ID)
 	}
 	return created, nil
@@ -151,7 +151,7 @@ func (s *scimUserSync) UserUpdated(tx *storage.Connection, r *http.Request, upda
 			return err
 		}
 	}
-	if old.Active && !row.Active {
+	if old.Active() && !row.Active() {
 		return models.Logout(tx, linked.ID)
 	}
 	return nil

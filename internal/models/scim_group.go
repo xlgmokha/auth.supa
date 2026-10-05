@@ -24,15 +24,6 @@ func (SCIMGroup) TableName() string {
 	return "scim_resources"
 }
 
-type SCIMGroupMember struct {
-	GroupID    uuid.UUID `db:"group_id"`
-	SCIMUserID uuid.UUID `db:"scim_user_id"`
-}
-
-func (SCIMGroupMember) TableName() string {
-	return "scim_group_members"
-}
-
 type SCIMGroupMembership struct {
 	GroupID    uuid.UUID `db:"group_id"`
 	SCIMUserID uuid.UUID `db:"scim_user_id"`
@@ -92,7 +83,7 @@ func FindSCIMMembershipsByGroup(tx *storage.Connection, providerID uuid.UUID, gr
 		return members, nil
 	}
 	if err := tx.RawQuery(
-		fmt.Sprintf("SELECT g.id AS group_id, u.id AS scim_user_id FROM %q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m JOIN %q u ON u.id = (m->>'value')::uuid WHERE g.id = ANY(?::uuid[]) AND u.sso_provider_id = ? AND u.deleted_at IS NULL ORDER BY g.id, u.id", scimGroupsTable.tableName, scimUsersTable.tableName),
+		fmt.Sprintf("SELECT g.id AS group_id, u.id AS scim_user_id FROM %q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m JOIN %q u ON u.id = (m->>'value')::uuid WHERE g.id = ANY(?::uuid[]) AND u.sso_provider_id = ? AND u.resource_type = 'User' AND u.deleted_at IS NULL ORDER BY g.id, u.id", scimGroupsTable.tableName, scimUsersTable.tableName),
 		groupIDs, providerID,
 	).All(&members); err != nil {
 		return nil, errors.Wrap(err, "error finding SCIM group members")
@@ -185,7 +176,7 @@ func uuidStrings(ids []uuid.UUID) []string {
 }
 
 func requireLiveSCIMUsers(tx *storage.Connection, providerID uuid.UUID, ids []uuid.UUID) error {
-	live, err := tx.Q().Where("id = ANY(?::uuid[]) AND sso_provider_id = ? AND deleted_at IS NULL", ids, providerID).Count(&SCIMUser{})
+	live, err := tx.Q().Where("id = ANY(?::uuid[]) AND sso_provider_id = ? AND resource_type = 'User' AND deleted_at IS NULL", ids, providerID).Count(&SCIMUser{})
 	if err != nil {
 		return errors.Wrap(err, "error finding SCIM group members")
 	}
