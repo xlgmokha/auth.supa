@@ -103,7 +103,7 @@ func FindSCIMMembershipsByUser(tx *storage.Connection, providerID uuid.UUID, sci
   SELECT (m->>'value')::uuid, g.id, true FROM %[1]q g CROSS JOIN LATERAL jsonb_array_elements(coalesce(g.resource->'members', '[]'::jsonb)) m
   WHERE m->>'value' = ANY(?::text[]) AND g.sso_provider_id = ? AND g.resource_type = 'Group' AND g.deleted_at IS NULL
   UNION
-  SELECT ms.scim_user_id, p.id, false FROM memberships ms JOIN %[1]q p ON p.resource->'members' @> jsonb_build_array(jsonb_build_object('value', ms.group_id::text))
+  SELECT ms.scim_user_id, p.id, false FROM memberships ms JOIN %[1]q p ON lower(p.resource::text)::jsonb @> jsonb_build_object('members', jsonb_build_array(jsonb_build_object('value', ms.group_id::text)))
   WHERE p.sso_provider_id = ? AND p.resource_type = 'Group' AND p.deleted_at IS NULL
 )
 SELECT ms.group_id, ms.scim_user_id, g.resource->>'displayName' AS display, CASE WHEN bool_or(ms.direct) THEN 'direct' ELSE 'indirect' END AS type
@@ -156,7 +156,7 @@ func ReplaceSCIMGroupMembersFrom(tx *storage.Connection, group *SCIMGroup, curre
 
 func RemoveSCIMMemberFromGroups(tx *storage.Connection, memberID uuid.UUID) error {
 	return errors.Wrap(tx.RawQuery(
-		fmt.Sprintf(`UPDATE %q SET resource = jsonb_set(resource, '{members}', (SELECT coalesce(jsonb_agg(m ORDER BY m->>'value'), '[]'::jsonb) FROM jsonb_array_elements(resource->'members') m WHERE m->>'value' <> ?)) WHERE resource_type = 'Group' AND resource->'members' @> jsonb_build_array(jsonb_build_object('value', ?::text))`, scimGroupsTable.tableName),
+		fmt.Sprintf(`UPDATE %q SET resource = jsonb_set(resource, '{members}', (SELECT coalesce(jsonb_agg(m ORDER BY m->>'value'), '[]'::jsonb) FROM jsonb_array_elements(resource->'members') m WHERE m->>'value' <> ?)) WHERE resource_type = 'Group' AND deleted_at IS NULL AND lower(resource::text)::jsonb @> jsonb_build_object('members', jsonb_build_array(jsonb_build_object('value', ?::text)))`, scimGroupsTable.tableName),
 		memberID.String(), memberID.String(),
 	).Exec(), "error removing SCIM member from groups")
 }
