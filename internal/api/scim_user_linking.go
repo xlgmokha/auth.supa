@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gofrs/uuid"
@@ -10,77 +11,61 @@ import (
 	"github.com/supabase/auth/internal/api/provider"
 	"github.com/supabase/auth/internal/hooks/v0hooks"
 	"github.com/supabase/auth/internal/models"
-	"github.com/supabase/auth/internal/observability"
 	"github.com/supabase/auth/internal/storage"
 )
 
 func (s *scimUserRepository) provisionAuthUser(tx *storage.Connection, row *models.SCIMUser, user *core.User) (*models.User, error) {
-	linked, created, err := s.linkAuthUser(tx, row, user)
+	providerType := scimProviderType(row.SSOProviderID)
+	decision, err := s.decideAccountLinking(tx, providerType, user)
+	if err != nil {
+		return nil, err
+	}
+	var linked, created *models.User
+	switch decision.Decision {
+	case models.CreateAccount:
+		candidate, err := s.newUser(providerType, decision, user)
+		if err != nil {
+			return nil, err
+		}
+		if created, err = s.api.signupNewUser(tx, candidate); err != nil {
+			return nil, err
+		}
+		if _, err := s.api.createNewIdentity(tx, created, providerType, scimIdentityData(user)); err != nil {
+			return nil, err
+		}
+		linked = created
+	case models.AccountExists, models.LinkAccount:
+		linked = decision.User
+		if !linked.IsSSOUser {
+			return nil, scimerrors.ErrUniqueness("user is not an SSO user")
+		}
+		if decision.Decision == models.LinkAccount {
+			if _, err := s.api.createNewIdentity(tx, linked, providerType, scimIdentityData(user)); err != nil {
+				return nil, err
+			}
+			if err := linked.UpdateAppMetaDataProviders(tx); err != nil {
+				return nil, err
+			}
+		}
+	case models.MultipleAccounts:
+		return nil, scimerrors.ErrUniqueness("multiple users share this email in the SSO provider")
+	default:
+		return nil, apierrors.NewInternalServerError("Unknown automatic linking decision: %v", decision.Decision)
+	}
+	if created != nil {
+		err = models.LinkNewSCIMUser(tx, row, linked.ID)
+	} else {
+		err = models.LinkSCIMUser(tx, row, linked.ID)
+	}
 	if err == nil && !row.Active {
 		err = models.Logout(tx, linked.ID)
 	}
 	return created, err
 }
 
-func (s *scimUserRepository) linkAuthUser(tx *storage.Connection, row *models.SCIMUser, user *core.User) (linked, created *models.User, err error) {
-	providerType := scimProviderType(row.SSOProviderID)
-	decision, err := s.decideAccountLinking(tx, providerType, user)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if decision.Decision == models.CreateAccount {
-		linked, err := s.createAuthUser(tx, providerType, decision, user)
-		if err != nil {
-			return nil, nil, err
-		}
-		return linked, linked, models.LinkNewSCIMUser(tx, row, linked.ID)
-	}
-	linked, err = s.existingAuthUser(tx, providerType, decision, user)
-	if err != nil {
-		return nil, nil, err
-	}
-	return linked, nil, models.LinkSCIMUser(tx, row, linked.ID)
-}
-
-func (s *scimUserRepository) existingAuthUser(tx *storage.Connection, providerType string, decision models.AccountLinkingResult, user *core.User) (*models.User, error) {
-	switch decision.Decision {
-	case models.AccountExists, models.LinkAccount:
-	case models.MultipleAccounts:
-		return nil, scimerrors.ErrUniqueness("multiple users share this email in the SSO provider")
-	default:
-		return nil, apierrors.NewInternalServerError("Unknown automatic linking decision: %v", decision.Decision)
-	}
-	if !decision.User.IsSSOUser {
-		return nil, scimerrors.ErrUniqueness("user is not an SSO user")
-	}
-	if decision.Decision == models.AccountExists {
-		return decision.User, nil
-	}
-	if _, err := s.api.createNewIdentity(tx, decision.User, providerType, scimIdentityData(user)); err != nil {
-		return nil, err
-	}
-	return decision.User, decision.User.UpdateAppMetaDataProviders(tx)
-}
-
-func (s *scimUserRepository) createAuthUser(tx *storage.Connection, providerType string, decision models.AccountLinkingResult, user *core.User) (*models.User, error) {
-	candidate, err := s.newUser(providerType, decision, user)
-	if err != nil {
-		return nil, err
-	}
-	created, err := s.api.signupNewUser(tx, candidate)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.api.createNewIdentity(tx, created, providerType, scimIdentityData(user)); err != nil {
-		return nil, err
-	}
-	return created, nil
-}
-
 func (s *scimUserRepository) beforeProvision(r *http.Request, db *storage.Connection, providerID uuid.UUID, user *core.User) error {
 	if scimUserEmail(user) == "" {
-		return errSCIMEmailRequired()
+		return scimerrors.ErrInvalidValue(`"emails" or an email address "userName" is required`)
 	}
 	if !s.api.hooksMgr.Enabled(v0hooks.BeforeUserCreated) {
 		return nil
@@ -94,16 +79,12 @@ func (s *scimUserRepository) beforeProvision(r *http.Request, db *storage.Connec
 	if err != nil {
 		return scimError(err)
 	}
-	return scimError(scimHookError(s.api.triggerBeforeUserCreated(r, db, candidate)))
-}
-
-func (s *scimUserRepository) runAfterUserCreatedHook(r *http.Request, db *storage.Connection, user *models.User) {
-	if user == nil {
-		return
+	err = s.api.triggerBeforeUserCreated(r, db, candidate)
+	var httpErr *apierrors.HTTPError
+	if errors.As(err, &httpErr) && httpErr.HTTPStatus < http.StatusInternalServerError {
+		return scimerrors.NewError(httpErr.HTTPStatus, "", httpErr.Message)
 	}
-	if err := s.api.triggerAfterUserCreated(r, db, user); err != nil {
-		observability.GetLogEntry(r).Entry.WithError(err).WithField("user_id", user.ID).Error("scim: after user created hook failed")
-	}
+	return scimError(err)
 }
 
 func (s *scimUserRepository) decideAccountLinking(conn *storage.Connection, providerType string, user *core.User) (models.AccountLinkingResult, error) {

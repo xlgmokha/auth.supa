@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
-	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/models"
 )
 
@@ -41,22 +40,6 @@ func errSCIMMemberNotFound() error {
 	return scimerrors.ErrInvalidValue(`"members.value" must reference a User in this provider`)
 }
 
-func errSCIMEmailRequired() error {
-	return scimerrors.ErrInvalidValue(`"emails" or an email address "userName" is required`)
-}
-
-func errSCIMEmailInvalid() error {
-	return scimerrors.ErrInvalidValue(`"emails" value must be an email address`)
-}
-
 func errSCIMTooManyRequests() error {
 	return scimerrors.NewError(http.StatusTooManyRequests, "", "Request rate limit reached")
-}
-
-func scimHookError(err error) error {
-	var httpErr *apierrors.HTTPError
-	if errors.As(err, &httpErr) && httpErr.HTTPStatus < http.StatusInternalServerError {
-		return scimerrors.NewError(httpErr.HTTPStatus, "", httpErr.Message)
-	}
-	return err
 }

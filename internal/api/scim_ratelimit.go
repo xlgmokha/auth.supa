@@ -17,20 +17,15 @@ import (
 func (a *API) limitSCIMByIP(lmt *limiter.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if a.scimSkipsTokenValidator(r) && a.performRateLimiting(lmt, r) != nil {
+			_, err := a.extractBearerToken(r)
+			skipsValidator := err != nil || r.URL.Path == scimBasePath+"/ServiceProviderConfig" || path.Clean(r.URL.Path) != r.URL.Path
+			if skipsValidator && a.performRateLimiting(lmt, r) != nil {
 				handler(scimTooManyRequests(lmt))(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-func (a *API) scimSkipsTokenValidator(r *http.Request) bool {
-	if _, err := a.extractBearerToken(r); err != nil {
-		return true
-	}
-	return r.URL.Path == scimBasePath+"/ServiceProviderConfig" || path.Clean(r.URL.Path) != r.URL.Path
 }
 
 func (a *API) limitSCIMInvalidToken(validate server.TokenValidator, lmt *limiter.Limiter) server.TokenValidator {
