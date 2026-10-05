@@ -1,8 +1,6 @@
 package api
 
 import (
-	"context"
-	"errors"
 	"math"
 	"net/http"
 	"path"
@@ -10,8 +8,6 @@ import (
 
 	"github.com/didip/tollbooth/v5"
 	"github.com/didip/tollbooth/v5/limiter"
-	"github.com/supabase-community/scim-go/pkg/protocol"
-	"github.com/supabase-community/scim-go/pkg/server"
 	"github.com/supabase/auth/internal/api/scim"
 )
 
@@ -29,16 +25,9 @@ func (a *API) limitSCIMByIP(lmt *limiter.Limiter) func(http.Handler) http.Handle
 	}
 }
 
-func (a *API) limitSCIMInvalidToken(validate server.TokenValidator, lmt *limiter.Limiter) server.TokenValidator {
-	return func(ctx context.Context, candidate string) (context.Context, error) {
-		next, err := validate(ctx, candidate)
-		if !errors.Is(err, server.ErrInvalidToken) {
-			return next, err
-		}
-		if r := scim.RequestKey.Value(ctx); r != nil && a.performRateLimiting(lmt, r) != nil {
-			return ctx, scim.ErrTooManyRequests()
-		}
-		return next, err
+func (a *API) limitedSCIMInvalidToken(lmt *limiter.Limiter) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		return a.performRateLimiting(lmt, r) != nil
 	}
 }
 
@@ -59,6 +48,6 @@ func scimTooManyRequests(lmt *limiter.Limiter) apiHandler {
 		if perSecond := lmt.GetMax(); perSecond > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(1/perSecond))))
 		}
-		return protocol.SendError(w, scim.ErrTooManyRequests())
+		return scim.SendTooManyRequests(w)
 	}
 }

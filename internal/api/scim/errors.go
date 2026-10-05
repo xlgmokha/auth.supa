@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase/auth/internal/models"
 )
@@ -38,6 +39,10 @@ func errSCIMMemberNotFound() error {
 	return scimerrors.ErrInvalidValue(`"members.value" must reference a User or Group in this provider`)
 }
 
-func ErrTooManyRequests() error {
+func errTooManyRequests() error {
 	return scimerrors.NewError(http.StatusTooManyRequests, "", "Request rate limit reached")
+}
+
+func SendTooManyRequests(w http.ResponseWriter) error {
+	return protocol.SendError(w, errTooManyRequests())
 }

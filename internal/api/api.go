@@ -8,7 +8,6 @@ import (
 	"github.com/rs/cors"
 	"github.com/sebest/xff"
 	"github.com/sirupsen/logrus"
-	"github.com/supabase-community/scim-go/pkg/server"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/apilimiter"
 	"github.com/supabase/auth/internal/api/apitask"
@@ -48,7 +47,7 @@ type API struct {
 	hooksMgr     *v0hooks.Manager
 	hibpClient   *hibp.PwnedClient
 	oauthServer  *oauthserver.Server
-	scim         *server.Server
+	scim         http.Handler
 	tokenService *tokens.Service
 	mailer       mailer.Mailer
 	oidcCache    *provider.OIDCProviderCache
@@ -140,7 +139,7 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 	}
 
 	api.scim = scim.NewServer(db, globalConfig, &scimUserSync{api: api},
-		api.limitSCIMInvalidToken(scim.NewTokenValidator(db), api.limiterOpts.SCIMIP),
+		scim.LimitInvalidTokens(scim.NewTokenValidator(db), api.limitedSCIMInvalidToken(api.limiterOpts.SCIMIP)),
 		api.limitSCIMByProvider(api.limiterOpts.SCIM),
 	)
 

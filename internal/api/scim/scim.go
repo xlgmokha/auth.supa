@@ -96,6 +96,19 @@ func NewTokenValidator(db *storage.Connection) server.TokenValidator {
 	}
 }
 
+func LimitInvalidTokens(validate server.TokenValidator, limited func(*http.Request) bool) server.TokenValidator {
+	return func(ctx context.Context, candidate string) (context.Context, error) {
+		next, err := validate(ctx, candidate)
+		if !errors.Is(err, server.ErrInvalidToken) {
+			return next, err
+		}
+		if r := RequestKey.Value(ctx); r != nil && limited(r) {
+			return ctx, errTooManyRequests()
+		}
+		return next, err
+	}
+}
+
 func WithRequest(w http.ResponseWriter, req *http.Request) (context.Context, error) {
 	ctx := RequestKey.WithValue(req.Context(), req)
 	return scimGroupSnapshotKey.WithValue(ctx, &scimGroupSnapshot{}), nil
