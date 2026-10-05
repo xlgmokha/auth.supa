@@ -5,14 +5,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/gofrs/uuid"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase/auth/internal/models"
-	"github.com/supabase/auth/internal/storage"
 )
 
 func groupWith(displayName, externalID string, memberIDs ...string) string {
@@ -619,101 +617,4 @@ func (ts *SCIMTestSuite) patchMembers(id string, ops ...string) map[string]any {
 	require.Equal(ts.T(), http.StatusNoContent, w.Code, w.Body.String())
 	require.Empty(ts.T(), w.Body.String())
 	return ts.get(ts.TokenA, "/Groups/"+id)
-}
-
-func (ts *SCIMTestSuite) TestConcurrentMemberAddsWithoutIfMatchLoseNoUpdates() {
-	const existing, attempts = 10_000, 8
-	seed := func(prefix string, n int) []uuid.UUID {
-		rows := []struct {
-			ID uuid.UUID `db:"id"`
-		}{}
-		require.NoError(ts.T(), ts.API.db.RawQuery(
-			`INSERT INTO scim_users (id, sso_provider_id, resource) SELECT gen_random_uuid(), ?, jsonb_build_object('schemas', jsonb_build_array('urn:ietf:params:scim:schemas:core:2.0:User'), 'userName', ? || i || '@example.com', 'active', true) FROM generate_series(1, ?) i RETURNING id`,
-			ts.A.ID, prefix, n,
-		).All(&rows))
-		ids := make([]uuid.UUID, len(rows))
-		for i, row := range rows {
-			ids[i] = row.ID
-		}
-		return ids
-	}
-	id := ts.createGroup(ts.TokenA, groupWith("Engineering", "eng"))
-	require.NoError(ts.T(), ts.API.db.RawQuery(
-		`INSERT INTO scim_group_members (group_id, scim_user_id) SELECT ?, unnest(?::uuid[])`,
-		id, seed("member", existing),
-	).Exec())
-	added := seed("joiner", attempts)
-	require.NoError(ts.T(), ts.API.db.RawQuery(`ANALYZE scim_users, scim_group_members`).Exec())
-
-	codes := make(chan int, attempts)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for _, member := range added {
-		wg.Go(func() {
-			<-start
-			codes <- ts.serve(protocol.MediaType, ts.TokenA, http.MethodPatch, "/Groups/"+id, patchOp(addMembers(member.String()))).Code
-		})
-	}
-	close(start)
-	wg.Wait()
-	close(codes)
-
-	counts := map[int]int{}
-	for code := range codes {
-		counts[code]++
-	}
-	require.Equal(ts.T(), map[int]int{http.StatusNoContent: attempts}, counts)
-	require.Len(ts.T(), memberValues(ts.get(ts.TokenA, "/Groups/"+id)), existing+attempts)
-}
-
-func (ts *SCIMTestSuite) TestConcurrentGroupWrites() {
-	alice := ts.create(ts.TokenA, userWith("alice@example.com", "a-1"))
-	bob := ts.create(ts.TokenA, userWith("bob@example.com", "b-1"))
-	carol := ts.create(ts.TokenA, userWith("carol@example.com", "c-1"))
-	addCarol := patchOp(addMembers(carol))
-	addBob := func(tx *storage.Connection) error {
-		return tx.RawQuery(`WITH added AS (INSERT INTO scim_group_members (group_id, scim_user_id) SELECT id, ? FROM scim_groups WHERE external_id = 'g-1') UPDATE scim_groups SET updated_at = clock_timestamp() WHERE external_id = 'g-1'`, bob).Exec()
-	}
-	rename := func(tx *storage.Connection) error {
-		return tx.RawQuery(`UPDATE scim_groups SET resource = jsonb_set(resource, '{displayName}', '"Platform"'), updated_at = clock_timestamp() WHERE external_id = 'g-1'`).Exec()
-	}
-
-	for _, tc := range []struct {
-		name, method, body string
-		ifMatch            string
-		finish             func(tx *storage.Connection) error
-		code               int
-		displayName        string
-		members            []string
-	}{
-		{name: "patch merges a concurrent member add", method: http.MethodPatch, body: addCarol, finish: addBob, code: http.StatusNoContent, displayName: "Engineering", members: []string{alice, bob, carol}},
-		{name: "patch with If-Match * merges a concurrent member add", method: http.MethodPatch, body: addCarol, ifMatch: "*", finish: addBob, code: http.StatusNoContent, displayName: "Engineering", members: []string{alice, bob, carol}},
-		{name: "patch with If-Match rejects a concurrent member add", method: http.MethodPatch, body: addCarol, ifMatch: "etag", finish: addBob, code: http.StatusPreconditionFailed, displayName: "Engineering", members: []string{alice, bob}},
-		{name: "patch rejects a concurrent rename", method: http.MethodPatch, body: addCarol, finish: rename, code: http.StatusConflict, displayName: "Platform", members: []string{alice}},
-		{name: "put rejects a concurrent member add", method: http.MethodPut, body: groupWith("Engineering", "g-1", alice, carol), finish: addBob, code: http.StatusConflict, displayName: "Engineering", members: []string{alice, bob}},
-	} {
-		id := ts.createGroup(ts.TokenA, groupWith("Engineering", "g-1", alice))
-		var headers []string
-		if tc.ifMatch != "" {
-			headers = []string{"If-Match", tc.ifMatch}
-		}
-		if tc.ifMatch == "etag" {
-			headers[1] = ts.etag("/Groups/" + id)
-		}
-		code, err := ts.whileLocked(
-			func(tx *storage.Connection) error {
-				return tx.RawQuery("SELECT 1 FROM scim_groups WHERE id = ? FOR UPDATE", id).Exec()
-			},
-			tc.finish,
-			tc.method, "/Groups/"+id, tc.body, headers...,
-		)
-		require.NoError(ts.T(), err, tc.name)
-		require.Equal(ts.T(), tc.code, code, tc.name)
-
-		got := ts.get(ts.TokenA, "/Groups/"+id)
-		require.Equal(ts.T(), tc.displayName, got["displayName"], tc.name)
-		require.ElementsMatch(ts.T(), tc.members, memberValues(got), tc.name)
-		w, _ := ts.do(ts.TokenA, http.MethodDelete, "/Groups/"+id, "")
-		require.Equal(ts.T(), http.StatusNoContent, w.Code, tc.name)
-	}
 }

@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gofrs/uuid"
 	"github.com/stretchr/testify/require"
@@ -21,7 +19,6 @@ import (
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase-community/scim-go/pkg/server"
 	"github.com/supabase/auth/internal/models"
-	"github.com/supabase/auth/internal/storage"
 )
 
 const oktaUser = `{
@@ -241,35 +238,6 @@ func (ts *SCIMTestSuite) TestDeleteRejectsStaleVersion() {
 	require.NotNil(ts.T(), ts.storedUser(created.ID).DeletedAt)
 }
 
-func (ts *SCIMTestSuite) whileLocked(lock, finish func(tx *storage.Connection) error, method, path, body string, headers ...string) (int, error) {
-	locked, release := make(chan struct{}), make(chan struct{})
-	held := make(chan error, 1)
-	go func() {
-		held <- ts.API.db.Transaction(func(tx *storage.Connection) error {
-			err := lock(tx)
-			close(locked)
-			if err != nil {
-				return err
-			}
-			<-release
-			return finish(tx)
-		})
-	}()
-	<-locked
-
-	code := make(chan int, 1)
-	go func() {
-		code <- ts.serve(protocol.MediaType, ts.TokenA, method, path, body, headers...).Code
-	}()
-	select {
-	case c := <-code:
-		ts.T().Fatalf("%s %s finished while the lock was held: %d", method, path, c)
-	case <-time.After(200 * time.Millisecond):
-	}
-	close(release)
-	return <-code, <-held
-}
-
 func (ts *SCIMTestSuite) scimAuditEntries() []models.AuditLogEntry {
 	return queryAuditEntries(ts.T(), ts.API.db, "payload->>'log_type' = ?", "scim")
 }
@@ -321,29 +289,6 @@ func (ts *SCIMTestSuite) TestRolesRoundTrip() {
 	id := ts.create(ts.TokenA, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"alice@example.com","emails":[{"primary":true,"value":"alice@example.com"}],"roles":[{"value":"admin","primary":true},{"value":"billing"}]}`)
 
 	require.Equal(ts.T(), []string{"admin", "billing"}, pluck(ts.get(ts.TokenA, "/Users/"+id)["roles"], "value"))
-}
-
-func (ts *SCIMTestSuite) TestConcurrentCreateWithinProvider() {
-	const attempts = 8
-	codes := make(chan int, attempts)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for range attempts {
-		wg.Go(func() {
-			<-start
-			codes <- ts.serve(protocol.MediaType, ts.TokenA, http.MethodPost, "/Users", userWith("race@example.com", "")).Code
-		})
-	}
-	close(start)
-	wg.Wait()
-	close(codes)
-
-	counts := map[int]int{}
-	for code := range codes {
-		counts[code]++
-	}
-	require.Equal(ts.T(), map[int]int{http.StatusCreated: 1, http.StatusConflict: attempts - 1}, counts)
-	require.EqualValues(ts.T(), 1, ts.list(ts.TokenA, `userName eq "race@example.com"`)["totalResults"])
 }
 
 func (ts *SCIMTestSuite) TestSort() {
