@@ -2,10 +2,8 @@ package scim
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase-community/scim-go/pkg/server"
+	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/storage"
 )
 
@@ -30,20 +29,6 @@ var columns = map[string]string{
 	"id":                "id",
 	"meta.created":      "created_at",
 	"meta.lastModified": "updated_at",
-}
-
-type scimResource struct {
-	ID            uuid.UUID       `db:"id"`
-	SSOProviderID uuid.UUID       `db:"sso_provider_id"`
-	ResourceType  string          `db:"resource_type"`
-	Resource      json.RawMessage `db:"resource"`
-	CreatedAt     time.Time       `db:"created_at"`
-	UpdatedAt     time.Time       `db:"updated_at"`
-	DeletedAt     *time.Time      `db:"deleted_at"`
-}
-
-func (scimResource) TableName() string {
-	return "scim_resources"
 }
 
 type repository[T core.Resource] struct {
@@ -63,10 +48,11 @@ func NewRepository[T core.Resource](db *storage.Connection, resourceType, endpoi
 }
 
 func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest) ([]T, int, error) {
-	q, err := r.scope(ctx)
+	providerID, err := r.providerID(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
+	q := models.SCIMResources(r.db.WithContext(ctx), providerID, r.resourceType)
 	if query.Filter != "" {
 		builder, err := protocol.Filter(r.schemas, query.Filter, newEvaluator(r.schemas))
 		if err != nil {
@@ -75,7 +61,7 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 		q = q.Scope(builder.Scope)
 	}
 	if query.Count == 0 {
-		total, err := q.Count(&scimResource{})
+		total, err := q.Count(&models.SCIMResource{})
 		return []T{}, total, err
 	}
 	order, args, err := r.order(query)
@@ -83,7 +69,7 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 		return nil, 0, err
 	}
 	q.Paginator = &pop.Paginator{PerPage: query.Count, Offset: query.Offset()}
-	rows := []scimResource{}
+	rows := []models.SCIMResource{}
 	if err := q.Order(order, args...).All(&rows); err != nil {
 		return nil, 0, err
 	}
@@ -104,15 +90,15 @@ func (r *repository[T]) Read(ctx context.Context, id string) (T, error) {
 	if err != nil {
 		return zero, notFound()
 	}
-	q, err := r.scope(ctx)
+	providerID, err := r.providerID(ctx)
 	if err != nil {
 		return zero, err
 	}
-	row := &scimResource{}
-	if err := q.Where("id = ?", key).First(row); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return zero, notFound()
-		}
+	row, err := models.FindSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, key)
+	if models.IsNotFoundError(err) {
+		return zero, notFound()
+	}
+	if err != nil {
 		return zero, err
 	}
 	return r.decode(row)
@@ -128,11 +114,8 @@ func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	row := &scimResource{}
-	if err := r.db.WithContext(ctx).RawQuery(
-		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource_type, resource) VALUES (?, ?, ?, ?::jsonb) RETURNING *", row.TableName()),
-		uuid.Must(uuid.NewV4()), providerID, r.resourceType, document,
-	).First(row); err != nil {
+	row, err := models.CreateSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, document)
+	if err != nil {
 		return zero, uniqueness(err)
 	}
 	return r.decode(row)
@@ -148,15 +131,12 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	row := &scimResource{}
 	common := item.Common()
-	if err := r.db.WithContext(ctx).RawQuery(
-		fmt.Sprintf("UPDATE %q SET resource = ?::jsonb, updated_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at) RETURNING *", row.TableName()),
-		document, common.ID, providerID, r.resourceType, versionTime(common.Meta.Version),
-	).First(row); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return zero, r.missing(ctx, common.ID)
-		}
+	row, err := models.UpdateSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
+	if models.IsNotFoundError(err) {
+		return zero, r.missing(ctx, common.ID)
+	}
+	if err != nil {
 		return zero, uniqueness(err)
 	}
 	return r.decode(row)
@@ -168,17 +148,11 @@ func (r *repository[T]) Delete(ctx context.Context, item T) error {
 		return err
 	}
 	common := item.Common()
-	count, err := r.db.WithContext(ctx).RawQuery(
-		fmt.Sprintf("UPDATE %q SET deleted_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at)", scimResource{}.TableName()),
-		common.ID, providerID, r.resourceType, versionTime(common.Meta.Version),
-	).ExecWithCount()
-	if err != nil {
-		return err
-	}
-	if count == 0 {
+	err = models.DeleteSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, uuid.FromStringOrNil(common.ID), versionTime(common.Meta.Version))
+	if models.IsNotFoundError(err) {
 		return r.missing(ctx, common.ID)
 	}
-	return nil
+	return err
 }
 
 func (r *repository[T]) providerID(ctx context.Context) (uuid.UUID, error) {
@@ -187,17 +161,6 @@ func (r *repository[T]) providerID(ctx context.Context) (uuid.UUID, error) {
 		return uuid.Nil, scimerrors.ErrInternal("missing SCIM token")
 	}
 	return token.SSOProviderID, nil
-}
-
-func (r *repository[T]) scope(ctx context.Context) (*pop.Query, error) {
-	providerID, err := r.providerID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return r.db.WithContext(ctx).Q().
-		Where("sso_provider_id = ?", providerID).
-		Where("resource_type = ?", r.resourceType).
-		Where("deleted_at IS NULL"), nil
 }
 
 func (r *repository[T]) missing(ctx context.Context, id string) error {
@@ -237,7 +200,7 @@ func (r *repository[T]) order(query *protocol.SearchRequest) (string, []any, err
 	return `lower(resource #>> ?::text[]) COLLATE "C"` + direction + ", id", []any{textArray(keys)}, nil
 }
 
-func (r *repository[T]) decode(row *scimResource) (T, error) {
+func (r *repository[T]) decode(row *models.SCIMResource) (T, error) {
 	var item T
 	if err := json.Unmarshal(row.Resource, &item); err != nil {
 		return item, err
