@@ -326,6 +326,17 @@ func TestSCIMUsers(t *testing.T) {
 		require.Equal(t, first.ID, list.Resources[0].ID)
 	})
 
+	t.Run("POST ignores read-only groups", func(t *testing.T) {
+		group := c.createGroup(t, "readonly-"+uuid.Must(uuid.NewV4()).String())
+		body := newSCIMUser(scimUserName("bjensen"), "Barbara", "Jensen")
+		body["groups"] = []map[string]any{{"value": group.ID}}
+		res := c.do(t, http.MethodPost, scimUsersPath, body)
+		require.Equal(t, http.StatusCreated, res.StatusCode)
+		user := scimDecode[core.User](t, res)
+		require.Empty(t, user.Groups)
+		require.Empty(t, c.user(t, user.ID).Groups)
+	})
+
 	t.Run("GET sorts by nested and multi-valued attributes", func(t *testing.T) {
 		tag := uuid.Must(uuid.NewV4()).String()
 		create := func(userName, familyName string) string {
