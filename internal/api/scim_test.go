@@ -466,6 +466,7 @@ func TestSCIMUniqueness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			res := c.do(t, tc.method, tc.path, tc.body)
 			require.Equal(t, http.StatusConflict, res.StatusCode)
+			require.Equal(t, protocol.MediaType, res.Header.Get("Content-Type"))
 			body := scimDecode[scimerrors.Error](t, res)
 			require.Equal(t, scimerrors.Uniqueness, body.ScimType)
 			require.Equal(t, tc.detail, body.Detail)
