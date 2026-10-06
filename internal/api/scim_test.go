@@ -356,6 +356,23 @@ func TestSCIMGroups(t *testing.T) {
 		require.ElementsMatch(t, []core.Member{scimMember(user), scimMember(other)}, c.group(t, group.ID).Members)
 	})
 
+	t.Run("POST stores a repeated member once", func(t *testing.T) {
+		user := createUser(t)
+
+		res := c.do(t, http.MethodPost, scimGroupsPath, newSCIMGroup("Tour Guides "+uuid.Must(uuid.NewV4()).String(), user, user))
+		require.Equal(t, http.StatusCreated, res.StatusCode)
+		require.Equal(t, []core.Member{scimMember(user)}, scimDecode[core.Group](t, res).Members)
+	})
+
+	t.Run("PUT keeps a repeated existing member once", func(t *testing.T) {
+		user := createUser(t)
+		group := create(t, user)
+
+		res := c.do(t, http.MethodPut, scimGroupsPath+"/"+group.ID, newSCIMGroup(group.DisplayName, user, user))
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Equal(t, []core.Member{scimMember(user)}, c.group(t, group.ID).Members)
+	})
+
 	t.Run("PATCH removes a member by filter", func(t *testing.T) {
 		user, other := createUser(t), createUser(t)
 		group := create(t, user, other)
