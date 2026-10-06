@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/gobuffalo/pop/v6"
 	"github.com/gofrs/uuid"
@@ -27,7 +28,7 @@ type SCIMScope struct {
 func (s SCIMScope) Query(tx *storage.Connection) *pop.Query {
 	return tx.Q().
 		Where("sso_provider_id = ?", s.ProviderID).
-		Where("resource_type = ?", s.ResourceType).
+		Where("resource_type = " + QuoteLiteral(s.ResourceType)).
 		Where("deleted_at IS NULL")
 }
 
@@ -141,6 +142,10 @@ func (s SCIMScope) DeleteReferences(tx *storage.Connection, id uuid.UUID) error 
 		}
 	}
 	return nil
+}
+
+func QuoteLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func scimUniqueness(err error) error {

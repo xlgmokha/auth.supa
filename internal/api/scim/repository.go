@@ -187,6 +187,9 @@ func (r *repository[T]) order(request *protocol.SearchRequest) (string, []any, e
 			keys = append([]string{string(extension.ID)}, keys...)
 		}
 	}
+	if len(keys) == 1 {
+		return `lower(resource ->> ` + models.QuoteLiteral(keys[0]) + `) COLLATE "C"` + direction + ", id", nil, nil
+	}
 	return `lower(resource #>> ?::text[]) COLLATE "C"` + direction + ", id", []any{textArray(keys)}, nil
 }
 

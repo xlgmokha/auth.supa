@@ -239,6 +239,25 @@ func TestSCIMUsers(t *testing.T) {
 		require.Equal(t, first.ID, list.Resources[0].ID)
 	})
 
+	t.Run("GET sorts by nested and multi-valued attributes", func(t *testing.T) {
+		tag := uuid.Must(uuid.NewV4()).String()
+		create := func(userName, familyName string) string {
+			res := c.do(t, http.MethodPost, scimUsersPath, newSCIMUser(userName+"+"+tag+"@example.com", "Barbara", familyName))
+			require.Equal(t, http.StatusCreated, res.StatusCode)
+			return scimDecode[core.User](t, res).ID
+		}
+		a, b := create("a", "Zulu"), create("b", "Alpha")
+
+		for sortBy, want := range map[string][]string{"userName": {a, b}, "emails.value": {a, b}, "name.familyName": {b, a}} {
+			list := scimList[core.User](t, c, scimUsersPath, url.Values{"filter": {`userName co "` + tag + `"`}, "sortBy": {sortBy}})
+			got := []string{}
+			for _, user := range list.Resources {
+				got = append(got, user.ID)
+			}
+			require.Equal(t, want, got, sortBy)
+		}
+	})
+
 	t.Run("GET returns only the requested attributes", func(t *testing.T) {
 		user := c.createUser(t, scimUserName("bjensen"))
 
