@@ -591,11 +591,10 @@ func TestSCIMUniqueness(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
 		body               any
-		detail             string
 	}{
-		{"POST duplicate userName", http.MethodPost, scimUsersPath, newSCIMUser(user.UserName, "Barbara", "Jensen"), `"userName" must be unique`},
-		{"POST duplicate externalId", http.MethodPost, scimUsersPath, withExternalID(scimUserName("bjensen")), `"externalId" must be unique`},
-		{"PUT duplicate userName", http.MethodPut, scimUsersPath + "/" + other.ID, newSCIMUser(user.UserName, "John", "Smith"), `"userName" must be unique`},
+		{"POST duplicate userName", http.MethodPost, scimUsersPath, newSCIMUser(user.UserName, "Barbara", "Jensen")},
+		{"POST duplicate externalId", http.MethodPost, scimUsersPath, withExternalID(scimUserName("bjensen"))},
+		{"PUT duplicate userName", http.MethodPut, scimUsersPath + "/" + other.ID, newSCIMUser(user.UserName, "John", "Smith")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := c.do(t, tc.method, tc.path, tc.body)
@@ -603,7 +602,7 @@ func TestSCIMUniqueness(t *testing.T) {
 			require.Equal(t, protocol.MediaType, res.Header.Get("Content-Type"))
 			body := scimDecode[scimerrors.Error](t, res)
 			require.Equal(t, scimerrors.Uniqueness, body.ScimType)
-			require.Equal(t, tc.detail, body.Detail)
+			require.Equal(t, "resource must be unique", body.Detail)
 		})
 	}
 }

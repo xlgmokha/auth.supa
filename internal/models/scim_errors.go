@@ -12,12 +12,10 @@ func (e SCIMNotFoundError) Is(target error) bool {
 	return target == errNotFound
 }
 
-type SCIMUniquenessError struct {
-	Attribute string
-}
+type SCIMUniquenessError struct{}
 
 func (e SCIMUniquenessError) Error() string {
-	return "SCIM resource " + e.Attribute + " must be unique"
+	return "SCIM resource must be unique"
 }
 
 func (e SCIMUniquenessError) Is(target error) bool {

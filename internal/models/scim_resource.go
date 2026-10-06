@@ -14,11 +14,6 @@ import (
 	"github.com/supabase/auth/internal/storage"
 )
 
-var scimUniqueAttributes = map[string]string{
-	"scim_resources_user_name_key":   "userName",
-	"scim_resources_external_id_key": "externalId",
-}
-
 type SCIMResource struct {
 	ID            uuid.UUID       `db:"id"`
 	SSOProviderID uuid.UUID       `db:"sso_provider_id"`
@@ -96,7 +91,7 @@ func (s SCIMScope) Delete(tx *storage.Connection, id uuid.UUID, version *time.Ti
 func scimUniqueness(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
-		return SCIMUniquenessError{Attribute: scimUniqueAttributes[pgErr.ConstraintName]}
+		return SCIMUniquenessError{}
 	}
 	return err
 }

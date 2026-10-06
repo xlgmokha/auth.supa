@@ -251,8 +251,8 @@ func (r *repository[T]) attributes() []query.Reference {
 }
 
 func invalid(err error) error {
-	if unique, ok := errors.AsType[models.SCIMUniquenessError](err); ok {
-		return scimerrors.ErrUniqueness(strconv.Quote(unique.Attribute) + " must be unique")
+	if _, ok := errors.AsType[models.SCIMUniquenessError](err); ok {
+		return scimerrors.ErrUniqueness("resource must be unique")
 	}
 	if reference, ok := errors.AsType[models.SCIMReferenceError](err); ok {
 		return scimerrors.ErrInvalidValue(reference.Error())
