@@ -101,7 +101,7 @@ func (e Evaluator) reference(attribute *protocol.Attribute) (Reference, bool) {
 	if top == nil {
 		return nil, false
 	}
-	index := slices.IndexFunc(e.references, func(ref Reference) bool { return ref.name() == top.Name })
+	index := slices.IndexFunc(e.references, func(ref Reference) bool { return ref.Name() == top.Name })
 	if index < 0 {
 		return nil, false
 	}

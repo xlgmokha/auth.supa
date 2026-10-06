@@ -208,7 +208,7 @@ func (r *repository[T]) save(ctx context.Context, scope models.SCIMScope, target
 
 func (r *repository[T]) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets map[string][]uuid.UUID) error {
 	for _, ref := range r.references {
-		if err := ref.link(tx, scope, source, targets[ref.name()]); err != nil {
+		if err := ref.link(tx, scope, source, targets[ref.Name()]); err != nil {
 			return err
 		}
 	}
@@ -240,7 +240,7 @@ func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]mod
 func (r *repository[T]) attributes() []query.Reference {
 	references := make([]query.Reference, len(r.references))
 	for i, ref := range r.references {
-		references[i] = ref.query()
+		references[i] = ref
 	}
 	return references
 }
@@ -261,7 +261,7 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 	}
 	elements := map[uuid.UUID]map[string]any{}
 	for _, ref := range r.references {
-		if !projection.Returns(ref.name()) {
+		if !projection.Returns(ref.Name()) {
 			continue
 		}
 		loaded, err := ref.load(tx, scope, ids, r.locations)
@@ -272,7 +272,7 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 			if elements[id] == nil {
 				elements[id] = map[string]any{}
 			}
-			elements[id][ref.name()] = list
+			elements[id][ref.Name()] = list
 		}
 	}
 	items := make([]T, 0, len(rows))
@@ -313,7 +313,7 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 	}
 	targets := map[string][]uuid.UUID{}
 	for _, ref := range r.references {
-		if targets[ref.name()], err = ref.extract(document); err != nil {
+		if targets[ref.Name()], err = ref.extract(document); err != nil {
 			return "", nil, err
 		}
 	}

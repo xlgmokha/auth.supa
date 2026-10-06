@@ -24,7 +24,7 @@ func (ref derived) resolve(schemas core.Schemas) Reference {
 }
 
 func (ref derived) extract(document core.Object) ([]uuid.UUID, error) {
-	document.Remove(ref.name())
+	document.Remove(ref.Name())
 	return nil, nil
 }
 
@@ -52,6 +52,14 @@ func (ref derived) load(tx *storage.Connection, scope models.SCIMScope, ids []uu
 	return elements, err
 }
 
-func (ref derived) query() query.Reference {
-	return query.Derived(ref.name(), ref.via)
+func (ref derived) Columns() map[string]string {
+	return map[string]string{query.ValueAttribute: "chain.source_id"}
+}
+
+func (ref derived) Exists(inner string, args []any) (string, []any) {
+	return `EXISTS (WITH RECURSIVE chain (source_id, depth) AS (
+		SELECT source_id, 1 FROM scim_resource_references WHERE target_id = scim_resources.id AND attribute = ?
+		UNION
+		SELECT ref.source_id, chain.depth + 1 FROM chain JOIN scim_resource_references ref ON ref.target_id = chain.source_id AND ref.attribute = ? WHERE chain.depth < 64
+	) SELECT 1 FROM chain WHERE ` + inner + ")", append([]any{ref.via, ref.via}, args...)
 }

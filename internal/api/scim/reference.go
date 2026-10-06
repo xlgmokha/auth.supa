@@ -9,17 +9,16 @@ import (
 )
 
 type Reference interface {
-	name() string
+	query.Reference
 	resolve(schemas core.Schemas) Reference
 	extract(document core.Object) ([]uuid.UUID, error)
 	link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error
 	load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error)
-	query() query.Reference
 }
 
 type named string
 
-func (n named) name() string {
+func (n named) Name() string {
 	return string(n)
 }
 

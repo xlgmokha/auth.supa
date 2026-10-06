@@ -42,5 +42,5 @@ type reference struct {
 
 func (r reference) sql() (string, []any) {
 	inner, args := r.inner.sql()
-	return r.ref.exists(inner, args)
+	return r.ref.Exists(inner, args)
 }
