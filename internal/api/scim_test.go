@@ -388,6 +388,20 @@ func TestSCIMGroups(t *testing.T) {
 	})
 }
 
+func TestSCIMIsolation(t *testing.T) {
+	c, other := newSCIMClient(t, nil), newSCIMClient(t, nil)
+	user := c.createUser(t, scimUserName("bjensen"))
+	group := c.createGroup(t, "Tour Guides "+uuid.Must(uuid.NewV4()).String(), user)
+
+	require.Equal(t, http.StatusNotFound, other.get(t, scimUsersPath+"/"+user.ID).StatusCode)
+	require.Equal(t, http.StatusNotFound, other.get(t, scimGroupsPath+"/"+group.ID).StatusCode)
+	require.Equal(t, http.StatusNotFound, other.do(t, http.MethodDelete, scimUsersPath+"/"+user.ID, nil).StatusCode)
+	require.Zero(t, scimList[core.User](t, other, scimUsersPath, url.Values{"filter": {`userName eq "` + user.UserName + `"`}}).TotalResults)
+	require.Zero(t, scimList[core.Group](t, other, scimGroupsPath, url.Values{"filter": {`displayName eq "` + group.DisplayName + `"`}}).TotalResults)
+	require.Equal(t, user.UserName, other.createUser(t, user.UserName).UserName)
+	require.Equal(t, user, c.user(t, user.ID))
+}
+
 func TestSCIMErrors(t *testing.T) {
 	c := newSCIMClient(t, nil)
 	user := c.createUser(t, scimUserName("bjensen"))

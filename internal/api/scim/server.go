@@ -30,10 +30,17 @@ func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) http.Ha
 			}),
 			server.WithResource(server.
 				NewResource[*core.User]("User", "/Users", core.SchemaUser, core.UserAttributes()...).
-				WithExtension(core.SchemaEnterpriseUser, core.EnterpriseUserAttributes()...),
+				WithExtension(core.SchemaEnterpriseUser, core.EnterpriseUserAttributes()...).
+				WithRepository(NewRepository[*core.User](db, "User", BaseURL(config)+"/Users", core.Schemas{
+					core.NewSchema(core.SchemaUser).With(core.UserAttributes()...),
+					core.NewSchema(core.SchemaEnterpriseUser).With(core.EnterpriseUserAttributes()...),
+				})),
 			),
 			server.WithResource(server.
-				NewResource[*core.Group]("Group", "/Groups", core.SchemaGroup, core.GroupAttributes()...),
+				NewResource[*core.Group]("Group", "/Groups", core.SchemaGroup, core.GroupAttributes()...).
+				WithRepository(NewRepository[*core.Group](db, "Group", BaseURL(config)+"/Groups", core.Schemas{
+					core.NewSchema(core.SchemaGroup).With(core.GroupAttributes()...),
+				})),
 			),
 			server.WithAuthentication(core.NewOAuthBearerToken().AsPrimary(), newAuthenticate(db)),
 		),
