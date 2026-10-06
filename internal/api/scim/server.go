@@ -3,6 +3,7 @@ package scim
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/protocol"
@@ -17,6 +18,12 @@ import (
 )
 
 var tokenKey = ctxkey.New[*models.SCIMToken]("scim_token")
+
+const BasePath = "/scim/v2"
+
+func BaseURL(config *conf.GlobalConfiguration) string {
+	return strings.TrimRight(config.API.ExternalURL, "/") + BasePath
+}
 
 type Server struct {
 	*server.Server
