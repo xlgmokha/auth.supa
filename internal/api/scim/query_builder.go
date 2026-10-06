@@ -118,6 +118,10 @@ func (b queryBuilder) Scope(q *pop.Query) *pop.Query {
 	return q.Where("lower(resource::text)::jsonb @@ ?::jsonpath", b.expr.String())
 }
 
+func (b queryBuilder) Build(q *pop.Query) *pop.Query {
+	return q.Scope(b.Scope)
+}
+
 type queryEvaluator struct {
 	schemas core.Schemas
 }

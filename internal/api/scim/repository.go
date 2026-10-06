@@ -73,7 +73,7 @@ func (r *repository[T]) filter(ctx context.Context, expression string) (*pop.Que
 	if err != nil {
 		return nil, err
 	}
-	return q.Scope(builder.Scope), nil
+	return builder.Build(q), nil
 }
 
 func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]models.SCIMResource, error) {
