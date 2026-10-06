@@ -442,15 +442,13 @@ func TestSCIMGroups(t *testing.T) {
 		require.Equal(t, groups, c.user(t, user.ID).Groups)
 		for _, filter := range []string{
 			`groups.value eq "` + parent.ID + `"`,
-			`groups[value eq "` + parent.ID + `" and type eq "indirect"]`,
-			`groups[value eq "` + child.ID + `" and type eq "direct"]`,
+			`groups[value eq "` + child.ID + `"]`,
 		} {
 			list := scimList[core.User](t, c, scimUsersPath, url.Values{"filter": {filter}})
 			require.Len(t, list.Resources, 1, filter)
 			require.Equal(t, user.ID, list.Resources[0].ID)
 			require.Equal(t, groups, list.Resources[0].Groups)
 		}
-		require.Zero(t, scimList[core.User](t, c, scimUsersPath, url.Values{"filter": {`groups[value eq "` + parent.ID + `" and type eq "direct"]`}}).TotalResults)
 
 		require.Equal(t, http.StatusNoContent, c.do(t, http.MethodDelete, scimGroupsPath+"/"+child.ID, nil).StatusCode)
 		require.Empty(t, c.user(t, user.ID).Groups)
@@ -562,6 +560,7 @@ func TestSCIMErrors(t *testing.T) {
 		{"GET users with an invalid filter", http.MethodGet, scimUsersPath + "?" + url.Values{"filter": {"userName eq"}}.Encode(), nil, http.StatusBadRequest},
 		{"GET groups with an invalid filter", http.MethodGet, scimGroupsPath + "?" + url.Values{"filter": {"displayName eq"}}.Encode(), nil, http.StatusBadRequest},
 		{"GET groups with an unsupported members filter", http.MethodGet, scimGroupsPath + "?" + url.Values{"filter": {`members.value co "x"`}}.Encode(), nil, http.StatusBadRequest},
+		{"GET users with a groups type filter", http.MethodGet, scimUsersPath + "?" + url.Values{"filter": {`groups[type eq "direct"]`}}.Encode(), nil, http.StatusBadRequest},
 		{"GET users with an unknown sortBy", http.MethodGet, scimUsersPath + "?sortBy=nope", nil, http.StatusBadRequest},
 		{"POST /.search", http.MethodPost, "/scim/v2/.search", map[string]any{}, http.StatusNotImplemented},
 		{"POST /Users/.search", http.MethodPost, scimUsersPath + "/.search", map[string]any{}, http.StatusNotImplemented},

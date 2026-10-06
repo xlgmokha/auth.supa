@@ -10,8 +10,8 @@ func Stored(attribute string) Reference {
 
 func (s stored) name() string { return s.attribute }
 
-func (s stored) columns() (string, string) {
-	return "ref.target_id", "lower(target.resource_type)"
+func (s stored) columns() map[string]string {
+	return map[string]string{valueAttribute: "ref.target_id", "type": "lower(target.resource_type)"}
 }
 
 func (s stored) exists(inner string, args []any) (string, []any) {

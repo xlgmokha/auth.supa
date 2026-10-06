@@ -11,8 +11,8 @@ func Derived(attribute, via string) Reference {
 
 func (d derived) name() string { return d.attribute }
 
-func (d derived) columns() (string, string) {
-	return "chain.source_id", "(CASE WHEN chain.depth = 1 THEN 'direct' ELSE 'indirect' END)"
+func (d derived) columns() map[string]string {
+	return map[string]string{valueAttribute: "chain.source_id"}
 }
 
 func (d derived) exists(inner string, args []any) (string, []any) {

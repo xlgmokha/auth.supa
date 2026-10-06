@@ -10,9 +10,11 @@ import (
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 )
 
+const valueAttribute = "value"
+
 type Reference interface {
 	name() string
-	columns() (id, kind string)
+	columns() map[string]string
 	exists(inner string, args []any) (string, []any)
 }
 
@@ -22,16 +24,16 @@ func match(ref Reference, definition *core.Attribute, op filter.Operator, value 
 		return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.name()+"."+definition.Name) + " supports only eq and ne")
 	}
 	sign := map[filter.Operator]string{filter.OpEquals: " = ", filter.OpNotEquals: " <> "}[op]
-	id, kind := ref.columns()
-	switch definition.Name {
-	case "value":
-		target, err := uuid.FromString(text)
-		if err != nil {
-			return predicate{text: strconv.FormatBool(op == filter.OpNotEquals)}, nil
-		}
-		return predicate{id + sign + "?::uuid", []any{target.String()}}, nil
-	case "type":
-		return predicate{kind + sign + "?", []any{strings.ToLower(text)}}, nil
+	column, ok := ref.columns()[definition.Name]
+	if !ok {
+		return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.name()+"."+definition.Name) + " cannot be filtered")
 	}
-	return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.name()+"."+definition.Name) + " cannot be filtered")
+	if definition.Name != valueAttribute {
+		return predicate{column + sign + "?", []any{strings.ToLower(text)}}, nil
+	}
+	target, err := uuid.FromString(text)
+	if err != nil {
+		return predicate{text: strconv.FormatBool(op == filter.OpNotEquals)}, nil
+	}
+	return predicate{column + sign + "?::uuid", []any{target.String()}}, nil
 }
