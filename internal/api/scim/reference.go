@@ -74,21 +74,7 @@ func (ref Reference) link(tx *storage.Connection, scope models.SCIMScope, source
 	if err != nil {
 		return err
 	}
-	have := make(map[uuid.UUID]bool, len(current))
-	for _, reference := range current {
-		have[reference.TargetID] = true
-	}
-	add := []uuid.UUID{}
-	for _, id := range wanted {
-		if !have[id] {
-			add = append(add, id)
-		}
-		delete(have, id)
-	}
-	remove := make([]uuid.UUID, 0, len(have))
-	for id := range have {
-		remove = append(remove, id)
-	}
+	add, remove := diff(current, wanted)
 	if err := ref.admit(tx, scope, source, add); err != nil {
 		return err
 	}
@@ -96,6 +82,23 @@ func (ref Reference) link(tx *storage.Connection, scope models.SCIMScope, source
 		return err
 	}
 	return scope.RemoveReferences(tx, source, ref.attribute, remove)
+}
+
+func diff(current []models.SCIMReference, wanted []uuid.UUID) (add, remove []uuid.UUID) {
+	have := make(map[uuid.UUID]bool, len(current))
+	for _, reference := range current {
+		have[reference.TargetID] = true
+	}
+	for _, id := range wanted {
+		if !have[id] {
+			add = append(add, id)
+		}
+		delete(have, id)
+	}
+	for id := range have {
+		remove = append(remove, id)
+	}
+	return add, remove
 }
 
 func (ref Reference) admit(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets []uuid.UUID) error {
