@@ -10,8 +10,6 @@ import (
 
 	"github.com/gobuffalo/pop/v6"
 	"github.com/gofrs/uuid"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgerrcode"
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
@@ -19,11 +17,6 @@ import (
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/storage"
 )
-
-var uniqueAttributes = map[string]string{
-	"scim_resources_user_name_key":   "userName",
-	"scim_resources_external_id_key": "externalId",
-}
 
 var columns = map[string]string{
 	"id":                "id",
@@ -234,9 +227,8 @@ func encode(item core.Resource) (string, error) {
 }
 
 func uniqueness(err error) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
-		return scimerrors.ErrUniqueness(strconv.Quote(uniqueAttributes[pgErr.ConstraintName]) + " must be unique")
+	if unique, ok := errors.AsType[models.SCIMUniquenessError](err); ok {
+		return scimerrors.ErrUniqueness(strconv.Quote(unique.Attribute) + " must be unique")
 	}
 	return err
 }

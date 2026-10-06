@@ -8,9 +8,16 @@ import (
 
 	"github.com/gobuffalo/pop/v6"
 	"github.com/gofrs/uuid"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgerrcode"
 	"github.com/pkg/errors"
 	"github.com/supabase/auth/internal/storage"
 )
+
+var scimUniqueAttributes = map[string]string{
+	"scim_resources_user_name_key":   "userName",
+	"scim_resources_external_id_key": "externalId",
+}
 
 type SCIMResource struct {
 	ID            uuid.UUID       `db:"id"`
@@ -55,7 +62,7 @@ func (s SCIMScope) Create(tx *storage.Connection, document string) (*SCIMResourc
 		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource_type, resource) VALUES (?, ?, ?, ?::jsonb) RETURNING *", resource.TableName()),
 		uuid.Must(uuid.NewV4()), s.ProviderID, s.ResourceType, document,
 	).First(resource)
-	return resource, err
+	return resource, scimUniqueness(err)
 }
 
 func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document string, version *time.Time) (*SCIMResource, error) {
@@ -67,7 +74,7 @@ func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document string,
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, SCIMNotFoundError{}
 		}
-		return nil, err
+		return nil, scimUniqueness(err)
 	}
 	return resource, nil
 }
@@ -84,4 +91,12 @@ func (s SCIMScope) Delete(tx *storage.Connection, id uuid.UUID, version *time.Ti
 		return SCIMNotFoundError{}
 	}
 	return nil
+}
+
+func scimUniqueness(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+		return SCIMUniquenessError{Attribute: scimUniqueAttributes[pgErr.ConstraintName]}
+	}
+	return err
 }
