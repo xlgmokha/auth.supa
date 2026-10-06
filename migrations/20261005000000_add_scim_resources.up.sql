@@ -7,7 +7,8 @@ create table if not exists {{ index .Options "Namespace" }}.scim_resources (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     deleted_at timestamptz,
-    constraint scim_resources_pkey primary key (id)
+    constraint scim_resources_pkey primary key (id),
+    constraint scim_resources_sso_provider_id_id_key unique (sso_provider_id, id)
 );
 
 /* auth_migration: 20261005000000 */
@@ -49,3 +50,21 @@ create index if not exists scim_resources_inactive_idx
 create index if not exists scim_resources_resource_idx
     on {{ index .Options "Namespace" }}.scim_resources using gin ((lower(resource::text)::jsonb) jsonb_path_ops)
     where deleted_at is null;
+
+/* auth_migration: 20261005000000 */
+create table if not exists {{ index .Options "Namespace" }}.scim_resource_references (
+    sso_provider_id uuid not null,
+    source_id uuid not null,
+    attribute text not null,
+    target_id uuid not null,
+    constraint scim_resource_references_pkey primary key (source_id, attribute, target_id),
+    constraint scim_resource_references_not_self check (source_id <> target_id),
+    constraint scim_resource_references_source_fkey foreign key (sso_provider_id, source_id)
+        references {{ index .Options "Namespace" }}.scim_resources (sso_provider_id, id) on delete cascade,
+    constraint scim_resource_references_target_fkey foreign key (sso_provider_id, target_id)
+        references {{ index .Options "Namespace" }}.scim_resources (sso_provider_id, id) on delete cascade
+);
+
+/* auth_migration: 20261005000000 */
+create index if not exists scim_resource_references_target_idx
+    on {{ index .Options "Namespace" }}.scim_resource_references (target_id, attribute);
