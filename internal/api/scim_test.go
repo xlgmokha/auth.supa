@@ -699,6 +699,8 @@ func TestSCIMFilters(t *testing.T) {
 		{scimGroupsPath, `displayName eq "Tour Guides"`, group.ID},
 		{scimGroupsPath, `members.value eq "` + user.ID + `"`, group.ID},
 		{scimGroupsPath, `members[value eq "` + user.ID + `"]`, group.ID},
+		{scimGroupsPath, strings.ToLower(string(core.SchemaGroup)) + `:members.value eq "` + user.ID + `"`, group.ID},
+		{scimGroupsPath, strings.ToLower(string(core.SchemaGroup)) + `:members[value eq "` + user.ID + `"]`, group.ID},
 		{scimGroupsPath, `members[type eq "user" and value eq "` + user.ID + `"]`, group.ID},
 		{scimGroupsPath, `displayName eq "Tour Guides" and members[value eq "` + user.ID + `"]`, group.ID},
 		{scimGroupsPath, `externalId eq "tour-guides" and members pr`, group.ID},

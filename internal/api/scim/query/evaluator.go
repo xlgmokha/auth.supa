@@ -86,7 +86,7 @@ func (e Evaluator) reference(attribute *protocol.Attribute) (Reference, bool) {
 	top := attribute.Parent
 	if top == nil {
 		base := e.schemas.Base()
-		if attribute.Path.URI != "" && core.SchemaURI(attribute.Path.URI) != base.ID {
+		if attribute.Path.URI != "" && e.schemas.Lookup(core.SchemaURI(attribute.Path.URI)) != base {
 			return nil, false
 		}
 		top = base.Attributes.Lookup(attribute.Path.Name)
