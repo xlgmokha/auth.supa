@@ -23,8 +23,8 @@ func (ref derived) resolve(schemas core.Schemas) Reference {
 	return ref
 }
 
-func (ref derived) extract(document map[string]any) ([]uuid.UUID, error) {
-	delete(document, ref.name())
+func (ref derived) extract(document core.Object) ([]uuid.UUID, error) {
+	document.Remove(ref.name())
 	return nil, nil
 }
 

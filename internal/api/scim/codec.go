@@ -2,7 +2,6 @@ package scim
 
 import (
 	"encoding/json"
-	"maps"
 
 	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
@@ -53,20 +52,17 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 
 func (r *repository[T]) decode(row *models.SCIMResource, attributes map[string]any) (T, error) {
 	var item T
-	raw := []byte(row.Resource)
-	if len(attributes) > 0 {
-		document := map[string]any{}
-		if err := json.Unmarshal(raw, &document); err != nil {
-			return item, err
-		}
-		maps.Copy(document, attributes)
-		var err error
-		if raw, err = json.Marshal(document); err != nil {
-			return item, err
-		}
-	}
-	if err := json.Unmarshal(raw, &item); err != nil {
+	if err := json.Unmarshal(row.Resource, &item); err != nil {
 		return item, err
+	}
+	if len(attributes) > 0 {
+		raw, err := json.Marshal(attributes)
+		if err != nil {
+			return item, err
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return item, err
+		}
 	}
 	common := item.Common()
 	common.ID = row.ID.String()
@@ -81,16 +77,12 @@ func (r *repository[T]) decode(row *models.SCIMResource, attributes map[string]a
 }
 
 func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
-	raw, err := json.Marshal(item)
+	document, err := core.NewObject(item)
 	if err != nil {
 		return "", nil, err
 	}
-	document := map[string]any{}
-	if err := json.Unmarshal(raw, &document); err != nil {
-		return "", nil, err
-	}
 	for _, key := range []string{"id", "meta", "password"} {
-		delete(document, key)
+		document.Remove(key)
 	}
 	targets := map[string][]uuid.UUID{}
 	for _, ref := range r.references {
@@ -98,6 +90,6 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 			return "", nil, err
 		}
 	}
-	raw, err = json.Marshal(document)
+	raw, err := json.Marshal(document)
 	return string(raw), targets, err
 }

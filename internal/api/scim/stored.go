@@ -30,9 +30,9 @@ func (ref stored) resolve(schemas core.Schemas) Reference {
 	return ref
 }
 
-func (ref stored) extract(document map[string]any) ([]uuid.UUID, error) {
-	elements, _ := document[ref.name()].([]any)
-	delete(document, ref.name())
+func (ref stored) extract(document core.Object) ([]uuid.UUID, error) {
+	elements, _ := document.Get(ref.name()).([]any)
+	document.Remove(ref.name())
 	ids := make([]uuid.UUID, 0, len(elements))
 	seen := make(map[uuid.UUID]bool, len(elements))
 	for _, element := range elements {

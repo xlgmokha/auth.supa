@@ -15,7 +15,7 @@ type Reference interface {
 	name() string
 	excluded(attributes []string) bool
 	resolve(schemas core.Schemas) Reference
-	extract(document map[string]any) ([]uuid.UUID, error)
+	extract(document core.Object) ([]uuid.UUID, error)
 	link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error
 	load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error)
 	query() query.Reference
