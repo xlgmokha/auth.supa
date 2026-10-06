@@ -18,6 +18,18 @@ func Derived(attribute, source, via string) Reference {
 	return derived{named: named(attribute), source: source, via: via}
 }
 
+func (ref derived) Columns() map[string]string {
+	return map[string]string{query.ValueAttribute: "chain.source_id"}
+}
+
+func (ref derived) Exists(inner string, args []any) (string, []any) {
+	return `EXISTS (WITH RECURSIVE chain (source_id, depth) AS (
+		SELECT source_id, 1 FROM scim_resource_references WHERE target_id = scim_resources.id AND attribute = ?
+		UNION
+		SELECT ref.source_id, chain.depth + 1 FROM chain JOIN scim_resource_references ref ON ref.target_id = chain.source_id AND ref.attribute = ? WHERE chain.depth < 64
+	) SELECT 1 FROM chain WHERE ` + inner + ")", append([]any{ref.via, ref.via}, args...)
+}
+
 func (ref derived) resolve(schemas core.Schemas) Reference {
 	ref.named, _ = ref.canonical(schemas)
 	return ref
@@ -36,30 +48,15 @@ func (ref derived) load(tx *storage.Connection, scope models.SCIMScope, ids []uu
 	elements := map[uuid.UUID][]any{}
 	ancestors, err := scope.FindAncestors(tx, ids, ref.via)
 	for _, ancestor := range ancestors {
-		element := map[string]any{
-			"value": ancestor.SourceID.String(),
-			"$ref":  locations[ref.source] + "/" + ancestor.SourceID.String(),
-			"type":  "indirect",
-		}
+		kind := "indirect"
 		if ancestor.Depth == 1 {
-			element["type"] = "direct"
+			kind = "direct"
 		}
+		entry := element(ancestor.SourceID, locations[ref.source], kind)
 		if ancestor.Display != nil {
-			element["display"] = *ancestor.Display
+			entry["display"] = *ancestor.Display
 		}
-		elements[ancestor.TargetID] = append(elements[ancestor.TargetID], element)
+		elements[ancestor.TargetID] = append(elements[ancestor.TargetID], entry)
 	}
 	return elements, err
-}
-
-func (ref derived) Columns() map[string]string {
-	return map[string]string{query.ValueAttribute: "chain.source_id"}
-}
-
-func (ref derived) Exists(inner string, args []any) (string, []any) {
-	return `EXISTS (WITH RECURSIVE chain (source_id, depth) AS (
-		SELECT source_id, 1 FROM scim_resource_references WHERE target_id = scim_resources.id AND attribute = ?
-		UNION
-		SELECT ref.source_id, chain.depth + 1 FROM chain JOIN scim_resource_references ref ON ref.target_id = chain.source_id AND ref.attribute = ? WHERE chain.depth < 64
-	) SELECT 1 FROM chain WHERE ` + inner + ")", append([]any{ref.via, ref.via}, args...)
 }

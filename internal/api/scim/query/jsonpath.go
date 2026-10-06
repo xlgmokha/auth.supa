@@ -81,9 +81,8 @@ func (e exists) String() string {
 }
 
 func literal(value any) string {
-	switch v := value.(type) {
-	case string:
-		return quote(strings.ToLower(v))
+	if text, ok := value.(string); ok {
+		return quote(strings.ToLower(text))
 	}
 	raw, _ := json.Marshal(value)
 	return string(raw)

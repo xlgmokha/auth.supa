@@ -26,3 +26,7 @@ func (n named) canonical(schemas core.Schemas) (named, *core.Attribute) {
 	attribute := schemas.Base().Attributes.Lookup(string(n))
 	return named(attribute.Name), attribute
 }
+
+func element(id uuid.UUID, endpoint, kind string) map[string]any {
+	return map[string]any{query.ValueAttribute: id.String(), "$ref": endpoint + "/" + id.String(), "type": kind}
+}

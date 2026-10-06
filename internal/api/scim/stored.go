@@ -21,6 +21,14 @@ func Stored(attribute string) Reference {
 	return stored{named: named(attribute)}
 }
 
+func (ref stored) Columns() map[string]string {
+	return map[string]string{query.ValueAttribute: "ref.target_id", "type": "lower(target.resource_type)"}
+}
+
+func (ref stored) Exists(inner string, args []any) (string, []any) {
+	return "EXISTS (SELECT 1 FROM scim_resource_references ref JOIN scim_resources target ON target.id = ref.target_id AND target.deleted_at IS NULL WHERE ref.source_id = scim_resources.id AND ref.attribute = ? AND " + inner + ")", append([]any{ref.Name()}, args...)
+}
+
 func (ref stored) resolve(schemas core.Schemas) Reference {
 	var attribute *core.Attribute
 	ref.named, attribute = ref.canonical(schemas)
@@ -70,23 +78,6 @@ func (ref stored) link(tx *storage.Connection, scope models.SCIMScope, source uu
 	return scope.RemoveReferences(tx, source, ref.Name(), remove)
 }
 
-func diff(current []models.SCIMReference, wanted []uuid.UUID) (add, remove []uuid.UUID) {
-	have := make(map[uuid.UUID]bool, len(current))
-	for _, reference := range current {
-		have[reference.TargetID] = true
-	}
-	for _, id := range wanted {
-		if !have[id] {
-			add = append(add, id)
-		}
-		delete(have, id)
-	}
-	for id := range have {
-		remove = append(remove, id)
-	}
-	return add, remove
-}
-
 func (ref stored) acyclic(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets []uuid.UUID) error {
 	if len(targets) == 0 {
 		return nil
@@ -107,19 +98,24 @@ func (ref stored) load(tx *storage.Connection, scope models.SCIMScope, ids []uui
 	elements := map[uuid.UUID][]any{}
 	references, err := scope.FindReferences(tx, ids, ref.Name())
 	for _, reference := range references {
-		elements[reference.SourceID] = append(elements[reference.SourceID], map[string]any{
-			"value": reference.TargetID.String(),
-			"$ref":  locations[reference.TargetType] + "/" + reference.TargetID.String(),
-			"type":  reference.TargetType,
-		})
+		elements[reference.SourceID] = append(elements[reference.SourceID], element(reference.TargetID, locations[reference.TargetType], reference.TargetType))
 	}
 	return elements, err
 }
 
-func (ref stored) Columns() map[string]string {
-	return map[string]string{query.ValueAttribute: "ref.target_id", "type": "lower(target.resource_type)"}
-}
-
-func (ref stored) Exists(inner string, args []any) (string, []any) {
-	return "EXISTS (SELECT 1 FROM scim_resource_references ref JOIN scim_resources target ON target.id = ref.target_id AND target.deleted_at IS NULL WHERE ref.source_id = scim_resources.id AND ref.attribute = ? AND " + inner + ")", append([]any{ref.Name()}, args...)
+func diff(current []models.SCIMReference, wanted []uuid.UUID) (add, remove []uuid.UUID) {
+	have := make(map[uuid.UUID]bool, len(current))
+	for _, reference := range current {
+		have[reference.TargetID] = true
+	}
+	for _, id := range wanted {
+		if !have[id] {
+			add = append(add, id)
+		}
+		delete(have, id)
+	}
+	for id := range have {
+		remove = append(remove, id)
+	}
+	return add, remove
 }
