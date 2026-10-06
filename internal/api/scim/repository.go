@@ -44,7 +44,8 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 	if err != nil {
 		return nil, 0, err
 	}
-	q, err := r.filter(r.db.WithContext(ctx), scope, query.Filter)
+	tx := r.db.WithContext(ctx)
+	q, err := r.filter(tx, scope, query.Filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -52,11 +53,11 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 		total, err := q.Count(&models.SCIMResource{})
 		return []T{}, total, err
 	}
-	rows, err := r.page(q, query)
+	rows, err := r.page(tx, scope, q, query)
 	if err != nil {
 		return nil, 0, err
 	}
-	items, err := r.decodeAll(r.db.WithContext(ctx), scope, rows, protocol.ProjectionFrom(ctx))
+	items, err := r.decodeAll(tx, scope, rows, protocol.ProjectionFrom(ctx))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -230,14 +231,22 @@ func (r *repository[T]) filter(tx *storage.Connection, scope models.SCIMScope, e
 	return builder.Build(q), nil
 }
 
-func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]models.SCIMResource, error) {
+func (r *repository[T]) page(tx *storage.Connection, scope models.SCIMScope, q *pop.Query, query *protocol.SearchRequest) ([]models.SCIMResource, error) {
 	order, args, err := r.order(query)
 	if err != nil {
 		return nil, err
 	}
 	q.Paginator = &pop.Paginator{PerPage: query.Count, Offset: query.Offset()}
+	keys := []models.SCIMResource{}
+	if err := q.Select("id").Order(order, args...).All(&keys); err != nil || len(keys) == 0 {
+		return keys, err
+	}
+	ids := make([]string, len(keys))
+	for i, key := range keys {
+		ids[i] = key.ID.String()
+	}
 	rows := []models.SCIMResource{}
-	return rows, q.Order(order, args...).All(&rows)
+	return rows, scope.Query(tx).Where("id = any(?::uuid[])", ids).Order(order, args...).All(&rows)
 }
 
 func (r *repository[T]) attributes() []query.Reference {
