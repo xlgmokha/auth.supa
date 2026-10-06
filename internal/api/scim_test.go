@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/protocol"
+	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase/auth/internal/conf"
 	"github.com/supabase/auth/internal/e2e"
 	"github.com/supabase/auth/internal/e2e/e2eapi"
@@ -421,7 +422,6 @@ func TestSCIMErrors(t *testing.T) {
 		{"PUT unknown group", http.MethodPut, missingGroup, newSCIMGroup("Tour Guides"), http.StatusNotFound},
 		{"PATCH unknown group", http.MethodPatch, missingGroup, newSCIMPatch(map[string]any{"op": "replace", "path": "displayName", "value": "Group B"}), http.StatusNotFound},
 		{"DELETE unknown group", http.MethodDelete, missingGroup, nil, http.StatusNotFound},
-		{"POST duplicate userName", http.MethodPost, scimUsersPath, newSCIMUser(user.UserName, "Barbara", "Jensen"), http.StatusConflict},
 		{"POST user without userName", http.MethodPost, scimUsersPath, map[string]any{"schemas": []core.SchemaURI{core.SchemaUser}}, http.StatusBadRequest},
 		{"POST group without displayName", http.MethodPost, scimGroupsPath, map[string]any{"schemas": []core.SchemaURI{core.SchemaGroup}}, http.StatusBadRequest},
 		{"PATCH unknown op", http.MethodPatch, scimUsersPath + "/" + user.ID, newSCIMPatch(map[string]any{"op": "bogus", "path": "active", "value": false}), http.StatusBadRequest},
@@ -437,6 +437,38 @@ func TestSCIMErrors(t *testing.T) {
 			res := c.do(t, tc.method, tc.path, tc.body)
 			require.Equal(t, tc.status, res.StatusCode)
 			requireSCIMError(t, res)
+		})
+	}
+}
+
+func TestSCIMUniqueness(t *testing.T) {
+	c := newSCIMClient(t, nil)
+	externalID := uuid.Must(uuid.NewV4()).String()
+	withExternalID := func(userName string) map[string]any {
+		user := newSCIMUser(userName, "Barbara", "Jensen")
+		user["externalId"] = externalID
+		return user
+	}
+	res := c.do(t, http.MethodPost, scimUsersPath, withExternalID(scimUserName("bjensen")))
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	user := scimDecode[core.User](t, res)
+	other := c.createUser(t, scimUserName("jsmith"))
+
+	for _, tc := range []struct {
+		name, method, path string
+		body               any
+		detail             string
+	}{
+		{"POST duplicate userName", http.MethodPost, scimUsersPath, newSCIMUser(user.UserName, "Barbara", "Jensen"), `"userName" must be unique`},
+		{"POST duplicate externalId", http.MethodPost, scimUsersPath, withExternalID(scimUserName("bjensen")), `"externalId" must be unique`},
+		{"PUT duplicate userName", http.MethodPut, scimUsersPath + "/" + other.ID, newSCIMUser(user.UserName, "John", "Smith"), `"userName" must be unique`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := c.do(t, tc.method, tc.path, tc.body)
+			require.Equal(t, http.StatusConflict, res.StatusCode)
+			body := scimDecode[scimerrors.Error](t, res)
+			require.Equal(t, scimerrors.Uniqueness, body.ScimType)
+			require.Equal(t, tc.detail, body.Detail)
 		})
 	}
 }
