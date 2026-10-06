@@ -60,44 +60,6 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 	return items, q.Paginator.TotalEntriesSize, nil
 }
 
-func (r *repository[T]) filter(ctx context.Context, expression string) (*pop.Query, error) {
-	scope, err := r.scope(ctx)
-	if err != nil {
-		return nil, err
-	}
-	q := scope.Query(r.db.WithContext(ctx))
-	if expression == "" {
-		return q, nil
-	}
-	builder, err := protocol.Filter(r.schemas, expression, newEvaluator(r.schemas))
-	if err != nil {
-		return nil, err
-	}
-	return builder.Build(q), nil
-}
-
-func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]models.SCIMResource, error) {
-	order, args, err := r.order(query)
-	if err != nil {
-		return nil, err
-	}
-	q.Paginator = &pop.Paginator{PerPage: query.Count, Offset: query.Offset()}
-	rows := []models.SCIMResource{}
-	return rows, q.Order(order, args...).All(&rows)
-}
-
-func (r *repository[T]) decodeAll(rows []models.SCIMResource) ([]T, error) {
-	items := make([]T, 0, len(rows))
-	for _, row := range rows {
-		item, err := r.decode(&row)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, nil
-}
-
 func (r *repository[T]) Read(ctx context.Context, id string) (T, error) {
 	var zero T
 	key, err := uuid.FromString(id)
@@ -214,6 +176,18 @@ func (r *repository[T]) order(query *protocol.SearchRequest) (string, []any, err
 	return `lower(resource #>> ?::text[]) COLLATE "C"` + direction + ", id", []any{textArray(keys)}, nil
 }
 
+func (r *repository[T]) decodeAll(rows []models.SCIMResource) ([]T, error) {
+	items := make([]T, 0, len(rows))
+	for _, row := range rows {
+		item, err := r.decode(&row)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 func (r *repository[T]) decode(row *models.SCIMResource) (T, error) {
 	var item T
 	if err := json.Unmarshal(row.Resource, &item); err != nil {
@@ -229,6 +203,32 @@ func (r *repository[T]) decode(row *models.SCIMResource) (T, error) {
 		Version:      version(row.UpdatedAt),
 	}
 	return item, nil
+}
+
+func (r *repository[T]) filter(ctx context.Context, expression string) (*pop.Query, error) {
+	scope, err := r.scope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := scope.Query(r.db.WithContext(ctx))
+	if expression == "" {
+		return q, nil
+	}
+	builder, err := protocol.Filter(r.schemas, expression, newEvaluator(r.schemas))
+	if err != nil {
+		return nil, err
+	}
+	return builder.Build(q), nil
+}
+
+func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]models.SCIMResource, error) {
+	order, args, err := r.order(query)
+	if err != nil {
+		return nil, err
+	}
+	q.Paginator = &pop.Paginator{PerPage: query.Count, Offset: query.Offset()}
+	rows := []models.SCIMResource{}
+	return rows, q.Order(order, args...).All(&rows)
 }
 
 func encode(item core.Resource) (string, error) {
