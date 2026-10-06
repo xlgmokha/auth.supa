@@ -550,6 +550,33 @@ func TestSCIMIsolation(t *testing.T) {
 	require.Equal(t, user, c.user(t, user.ID))
 }
 
+func TestSCIMSearch(t *testing.T) {
+	c := newSCIMClient(t, nil)
+	user := c.createUser(t, scimUserName("bjensen"))
+	c.createUser(t, scimUserName("jsmith"))
+	group := c.createGroup(t, "Tour Guides", user)
+
+	search := func(t *testing.T, path string, body map[string]any) protocol.ListResponse[map[string]any] {
+		body["schemas"] = []core.SchemaURI{protocol.SchemaSearchRequest}
+		res := c.do(t, http.MethodPost, path+"/.search", body)
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		return scimDecode[protocol.ListResponse[map[string]any]](t, res)
+	}
+
+	t.Run("filters Users", func(t *testing.T) {
+		list := search(t, scimUsersPath, map[string]any{"filter": `userName eq "` + user.UserName + `"`, "attributes": []string{"userName"}})
+		require.Equal(t, 1, list.TotalResults)
+		require.Equal(t, []map[string]any{{"id": user.ID, "userName": user.UserName, "schemas": []any{string(core.SchemaUser)}}}, list.Resources)
+	})
+
+	t.Run("filters Groups", func(t *testing.T) {
+		list := search(t, scimGroupsPath, map[string]any{"filter": `displayName eq "Tour Guides"`, "excludedAttributes": []string{"members"}})
+		require.Equal(t, 1, list.TotalResults)
+		require.Equal(t, group.ID, list.Resources[0]["id"])
+		require.NotContains(t, list.Resources[0], "members")
+	})
+}
+
 func TestSCIMErrors(t *testing.T) {
 	c := newSCIMClient(t, nil)
 	user := c.createUser(t, scimUserName("bjensen"))
@@ -580,8 +607,8 @@ func TestSCIMErrors(t *testing.T) {
 		{"GET users with a groups type filter", http.MethodGet, scimUsersPath + "?" + url.Values{"filter": {`groups[type eq "direct"]`}}.Encode(), nil, http.StatusBadRequest},
 		{"GET users with an unknown sortBy", http.MethodGet, scimUsersPath + "?sortBy=nope", nil, http.StatusBadRequest},
 		{"POST /.search", http.MethodPost, "/scim/v2/.search", map[string]any{}, http.StatusNotImplemented},
-		{"POST /Users/.search", http.MethodPost, scimUsersPath + "/.search", map[string]any{}, http.StatusNotImplemented},
-		{"POST /Groups/.search", http.MethodPost, scimGroupsPath + "/.search", map[string]any{}, http.StatusNotImplemented},
+		{"POST /Users/.search without the SearchRequest schema", http.MethodPost, scimUsersPath + "/.search", map[string]any{}, http.StatusBadRequest},
+		{"POST /Groups/.search without the SearchRequest schema", http.MethodPost, scimGroupsPath + "/.search", map[string]any{}, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := c.do(t, tc.method, tc.path, tc.body)
