@@ -28,8 +28,8 @@ type repository[T core.Resource] struct {
 }
 
 func NewRepository[T core.Resource](db *storage.Connection, resourceType string, locations map[string]string, schemas core.Schemas, references ...ref.Reference) server.Repository[T] {
-	for i, ref := range references {
-		references[i] = ref.Resolve(schemas)
+	for i, reference := range references {
+		references[i] = reference.Resolve(schemas)
 	}
 	return &repository[T]{
 		db:           db,
@@ -212,8 +212,8 @@ func (r *repository[T]) save(ctx context.Context, scope models.SCIMScope, target
 }
 
 func (r *repository[T]) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets map[string][]uuid.UUID) error {
-	for _, ref := range r.references {
-		if err := ref.Link(tx, scope, source, targets[ref.Name()]); err != nil {
+	for _, reference := range r.references {
+		if err := reference.Link(tx, scope, source, targets[reference.Name()]); err != nil {
 			return err
 		}
 	}
@@ -252,8 +252,8 @@ func (r *repository[T]) page(tx *storage.Connection, scope models.SCIMScope, q *
 
 func (r *repository[T]) attributes() []query.Reference {
 	references := make([]query.Reference, len(r.references))
-	for i, ref := range r.references {
-		references[i] = ref
+	for i, reference := range r.references {
+		references[i] = reference
 	}
 	return references
 }
@@ -273,11 +273,11 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 		ids[i] = row.ID
 	}
 	elements := map[uuid.UUID]map[string]any{}
-	for _, ref := range r.references {
-		if !projection.Returns(ref.Name()) {
+	for _, reference := range r.references {
+		if !projection.Returns(reference.Name()) {
 			continue
 		}
-		loaded, err := ref.Load(tx, scope, ids, r.locations)
+		loaded, err := reference.Load(tx, scope, ids, r.locations)
 		if err != nil {
 			return nil, err
 		}
@@ -285,7 +285,7 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 			if elements[id] == nil {
 				elements[id] = map[string]any{}
 			}
-			elements[id][ref.Name()] = list
+			elements[id][reference.Name()] = list
 		}
 	}
 	items := make([]T, 0, len(rows))
@@ -325,11 +325,11 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 		document.Remove(key)
 	}
 	targets := map[string][]uuid.UUID{}
-	for _, ref := range r.references {
-		if targets[ref.Name()], err = ref.Extract(document.Get(ref.Name())); err != nil {
+	for _, reference := range r.references {
+		if targets[reference.Name()], err = reference.Extract(document.Get(reference.Name())); err != nil {
 			return "", nil, err
 		}
-		document.Remove(ref.Name())
+		document.Remove(reference.Name())
 	}
 	raw, err := json.Marshal(document)
 	return string(raw), targets, err

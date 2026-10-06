@@ -21,86 +21,86 @@ func Stored(attribute string) Reference {
 	return stored{named: named(attribute)}
 }
 
-func (ref stored) Columns() map[string]string {
+func (s stored) Columns() map[string]string {
 	return map[string]string{
-		query.ValueAttribute: "ref.target_id",
+		query.ValueAttribute: "edge.target_id",
 		"type":               "lower(target.resource_type)",
 	}
 }
 
-func (ref stored) Exists(inner string, args []any) (string, []any) {
-	return "EXISTS (SELECT 1 FROM scim_resource_references ref JOIN scim_resources target ON target.id = ref.target_id AND target.deleted_at IS NULL WHERE ref.source_id = scim_resources.id AND ref.attribute = ? AND " + inner + ")", append([]any{ref.Name()}, args...)
+func (s stored) Exists(inner string, args []any) (string, []any) {
+	return "EXISTS (SELECT 1 FROM scim_resource_references edge JOIN scim_resources target ON target.id = edge.target_id AND target.deleted_at IS NULL WHERE edge.source_id = scim_resources.id AND edge.attribute = ? AND " + inner + ")", append([]any{s.Name()}, args...)
 }
 
-func (ref stored) Resolve(schemas core.Schemas) Reference {
+func (s stored) Resolve(schemas core.Schemas) Reference {
 	var attribute *core.Attribute
-	ref.named, attribute = ref.canonical(schemas)
+	s.named, attribute = s.canonical(schemas)
 	for _, target := range attribute.SubAttribute("$ref").ReferenceTypes {
-		ref.targets = append(ref.targets, string(target))
+		s.targets = append(s.targets, string(target))
 	}
-	return ref
+	return s
 }
 
-func (ref stored) Extract(attribute any) ([]uuid.UUID, error) {
+func (s stored) Extract(attribute any) ([]uuid.UUID, error) {
 	elements, _ := attribute.([]any)
 	ids := make([]uuid.UUID, 0, len(elements))
 	for _, element := range elements {
 		value, _ := element.(map[string]any)[query.ValueAttribute].(string)
 		id, err := uuid.FromString(value)
 		if err != nil {
-			return nil, ref.invalidValue(value)
+			return nil, s.invalidValue(value)
 		}
 		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
-func (ref stored) Link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error {
-	current, err := scope.FindReferences(tx, []uuid.UUID{source}, ref.Name())
+func (s stored) Link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error {
+	current, err := scope.FindReferences(tx, []uuid.UUID{source}, s.Name())
 	if err != nil {
 		return err
 	}
 	add, remove := diff(current, wanted)
-	if err := ref.acyclic(tx, scope, source, add); err != nil {
+	if err := s.acyclic(tx, scope, source, add); err != nil {
 		return err
 	}
-	added, err := scope.AddReferences(tx, source, ref.Name(), ref.targets, add)
+	added, err := scope.AddReferences(tx, source, s.Name(), s.targets, add)
 	if err != nil {
 		return err
 	}
 	if i := slices.IndexFunc(add, func(id uuid.UUID) bool { return !slices.Contains(added, id) }); i >= 0 {
-		return ref.invalidValue(add[i].String())
+		return s.invalidValue(add[i].String())
 	}
-	return scope.RemoveReferences(tx, source, ref.Name(), remove)
+	return scope.RemoveReferences(tx, source, s.Name(), remove)
 }
 
-func (ref stored) Load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
+func (s stored) Load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
 	elements := map[uuid.UUID][]any{}
-	references, err := scope.FindReferences(tx, ids, ref.Name())
+	references, err := scope.FindReferences(tx, ids, s.Name())
 	for _, reference := range references {
 		elements[reference.SourceID] = append(elements[reference.SourceID], element(reference.TargetID, locations[reference.TargetType], reference.TargetType))
 	}
 	return elements, err
 }
 
-func (ref stored) acyclic(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets []uuid.UUID) error {
+func (s stored) acyclic(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets []uuid.UUID) error {
 	if len(targets) == 0 {
 		return nil
 	}
-	ancestors, err := scope.FindAncestors(tx, []uuid.UUID{source}, ref.Name())
+	ancestors, err := scope.FindAncestors(tx, []uuid.UUID{source}, s.Name())
 	if err != nil {
 		return err
 	}
 	for _, target := range targets {
 		if target == source || slices.ContainsFunc(ancestors, func(ancestor models.SCIMAncestor) bool { return ancestor.SourceID == target }) {
-			return scimerrors.ErrInvalidValue(strconv.Quote(target.String()) + " would make " + ref.Name() + " cyclic")
+			return scimerrors.ErrInvalidValue(strconv.Quote(target.String()) + " would make " + s.Name() + " cyclic")
 		}
 	}
 	return nil
 }
 
-func (ref stored) invalidValue(value string) error {
-	return scimerrors.ErrInvalidValue(strconv.Quote(value) + " is not a valid " + ref.Name() + " value")
+func (s stored) invalidValue(value string) error {
+	return scimerrors.ErrInvalidValue(strconv.Quote(value) + " is not a valid " + s.Name() + " value")
 }
 
 func diff(current []models.SCIMReference, wanted []uuid.UUID) (add, remove []uuid.UUID) {
