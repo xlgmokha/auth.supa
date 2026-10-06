@@ -91,7 +91,11 @@ func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	row, err := scope.Create(r.db.WithContext(ctx), document)
+	var row *models.SCIMResource
+	err = r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
+		row, err = scope.Create(tx, document)
+		return err
+	})
 	if err != nil {
 		return zero, uniqueness(err)
 	}
@@ -109,7 +113,11 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 		return zero, err
 	}
 	common := item.Common()
-	row, err := scope.Update(r.db.WithContext(ctx), uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
+	var row *models.SCIMResource
+	err = r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
+		row, err = scope.Update(tx, uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
+		return err
+	})
 	if models.IsNotFoundError(err) {
 		return zero, r.missing(ctx, common.ID)
 	}
@@ -125,7 +133,9 @@ func (r *repository[T]) Delete(ctx context.Context, item T) error {
 		return err
 	}
 	common := item.Common()
-	err = scope.Delete(r.db.WithContext(ctx), uuid.FromStringOrNil(common.ID), versionTime(common.Meta.Version))
+	err = r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
+		return scope.Delete(tx, uuid.FromStringOrNil(common.ID), versionTime(common.Meta.Version))
+	})
 	if models.IsNotFoundError(err) {
 		return r.missing(ctx, common.ID)
 	}
