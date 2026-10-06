@@ -49,7 +49,7 @@ func (ts *SCIMTokenTestSuite) TestTimestampsAreUTC() {
 	token, plaintext := ts.createToken(&expiresAt)
 	authenticated, err := AuthenticateSCIMToken(ts.db, plaintext)
 	require.NoError(ts.T(), err)
-	require.NoError(ts.T(), authenticated.Revoke(ts.db))
+	authenticated = ts.revoke(authenticated)
 	found, err := FindSCIMTokensBySSOProvider(ts.db, ts.provider.ID)
 	require.NoError(ts.T(), err)
 	require.Len(ts.T(), found, 1)
@@ -67,7 +67,7 @@ func (ts *SCIMTokenTestSuite) TestTimestampsAreUTC() {
 func (ts *SCIMTokenTestSuite) TestFindBySSOProvider() {
 	active, _ := ts.createToken(nil)
 	revoked, _ := ts.createToken(nil)
-	require.NoError(ts.T(), revoked.Revoke(ts.db))
+	ts.revoke(revoked)
 	expired, _ := ts.createToken(nil)
 	ts.expire(expired)
 	_, _, err := CreateSCIMToken(ts.db, ts.createProvider().ID, nil)
@@ -116,7 +116,7 @@ func (ts *SCIMTokenTestSuite) TestAuthenticateRejects() {
 		{"unknown token", func() string { return "scim_" + "00000000000000000000000000000000000000000" }},
 		{"revoked token", func() string {
 			token, plaintext := ts.createToken(nil)
-			require.NoError(ts.T(), token.Revoke(ts.db))
+			ts.revoke(token)
 			return plaintext
 		}},
 		{"expired token", func() string {
@@ -160,6 +160,12 @@ func (ts *SCIMTokenTestSuite) createToken(expiresAt *time.Time) (*SCIMToken, str
 	token, plaintext, err := CreateSCIMToken(ts.db, ts.provider.ID, expiresAt)
 	require.NoError(ts.T(), err)
 	return token, plaintext
+}
+
+func (ts *SCIMTokenTestSuite) revoke(token *SCIMToken) *SCIMToken {
+	revoked, err := RevokeSCIMToken(ts.db, token.SSOProviderID, token.ID)
+	require.NoError(ts.T(), err)
+	return revoked
 }
 
 func (ts *SCIMTokenTestSuite) expire(token *SCIMToken) {

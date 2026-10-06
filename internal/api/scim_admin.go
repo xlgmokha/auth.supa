@@ -107,13 +107,7 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
-	id := uuid.FromStringOrNil(chi.URLParam(r, "token_id"))
-	var token *models.SCIMToken
-	err := db.Transaction(func(tx *storage.Connection) error {
-		var terr error
-		token, terr = models.RevokeSCIMToken(tx, provider.ID, id)
-		return terr
-	})
+	token, err := models.RevokeSCIMToken(db, provider.ID, uuid.FromStringOrNil(chi.URLParam(r, "token_id")))
 	if err != nil {
 		if models.IsNotFoundError(err) {
 			return apierrors.NewNotFoundError(apierrors.ErrorCodeSSOProviderNotFound, "SCIM token not found")

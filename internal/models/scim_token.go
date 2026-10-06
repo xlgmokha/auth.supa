@@ -49,23 +49,6 @@ func (t *SCIMToken) AfterFind(*pop.Connection) error {
 	return nil
 }
 
-func (t *SCIMToken) IsRevoked() bool {
-	return t.RevokedAt != nil
-}
-
-func (t *SCIMToken) Revoke(tx *storage.Connection) error {
-	if t.IsRevoked() {
-		return nil
-	}
-	if err := tx.RawQuery(
-		fmt.Sprintf("UPDATE %q SET revoked_at = now() WHERE id = ? AND revoked_at IS NULL RETURNING *", t.TableName()),
-		t.ID,
-	).First(t); err != nil {
-		return errors.Wrap(err, "error revoking SCIM token")
-	}
-	return nil
-}
-
 func CreateSCIMToken(tx *storage.Connection, providerID uuid.UUID, expiresAt *time.Time) (*SCIMToken, string, error) {
 	plaintext, err := generateSCIMToken()
 	if err != nil {
@@ -107,27 +90,16 @@ func FindActiveSCIMTokensBySSOProvider(tx *storage.Connection, providerID uuid.U
 	return tokens, nil
 }
 
-func FindSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMToken, error) {
+func RevokeSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMToken, error) {
 	token := &SCIMToken{}
-	if err := tx.Q().Where("sso_provider_id = ? AND id = ?", providerID, id).First(token); err != nil {
+	if err := tx.RawQuery(
+		fmt.Sprintf("UPDATE %q SET revoked_at = COALESCE(revoked_at, now()) WHERE sso_provider_id = ? AND id = ? RETURNING *", token.TableName()),
+		providerID, id,
+	).First(token); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, SCIMNotFoundError{}
 		}
-		return nil, errors.Wrap(err, "error finding SCIM token")
-	}
-	return token, nil
-}
-
-func RevokeSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMToken, error) {
-	token, err := FindSCIMToken(tx, providerID, id)
-	if err != nil || token.IsRevoked() {
-		return token, err
-	}
-	if err := token.Revoke(tx); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return FindSCIMToken(tx, providerID, id)
-		}
-		return nil, err
+		return nil, errors.Wrap(err, "error revoking SCIM token")
 	}
 	return token, nil
 }
