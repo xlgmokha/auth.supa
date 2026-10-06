@@ -44,17 +44,13 @@ func (ref stored) resolve(schemas core.Schemas) Reference {
 func (ref stored) extract(attribute any) ([]uuid.UUID, error) {
 	elements, _ := attribute.([]any)
 	ids := make([]uuid.UUID, 0, len(elements))
-	seen := make(map[uuid.UUID]bool, len(elements))
 	for _, element := range elements {
 		value, _ := element.(map[string]any)[query.ValueAttribute].(string)
 		id, err := uuid.FromString(value)
 		if err != nil {
 			return nil, ref.invalidValue(value)
 		}
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
+		ids = append(ids, id)
 	}
 	return ids, nil
 }
@@ -113,13 +109,15 @@ func diff(current []models.SCIMReference, wanted []uuid.UUID) (add, remove []uui
 		have[reference.TargetID] = true
 	}
 	for _, id := range wanted {
-		if !have[id] {
+		if _, ok := have[id]; !ok {
 			add = append(add, id)
 		}
-		delete(have, id)
+		have[id] = false
 	}
-	for id := range have {
-		remove = append(remove, id)
+	for id, stale := range have {
+		if stale {
+			remove = append(remove, id)
+		}
 	}
 	return add, remove
 }
