@@ -14,6 +14,7 @@ import (
 	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase-community/scim-go/pkg/server"
+	"github.com/supabase/auth/internal/api/scim/query"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/storage"
 )
@@ -214,7 +215,7 @@ func (r *repository[T]) filter(ctx context.Context, expression string) (*pop.Que
 	if expression == "" {
 		return q, nil
 	}
-	builder, err := protocol.Filter(r.schemas, expression, newEvaluator(r.schemas))
+	builder, err := protocol.Filter(r.schemas, expression, query.NewEvaluator(r.schemas))
 	if err != nil {
 		return nil, err
 	}

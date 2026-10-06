@@ -1,4 +1,4 @@
-package scim
+package query
 
 import (
 	"encoding/json"
@@ -126,7 +126,7 @@ type queryEvaluator struct {
 	schemas core.Schemas
 }
 
-func newEvaluator(schemas core.Schemas) protocol.Evaluator[queryBuilder] {
+func NewEvaluator(schemas core.Schemas) protocol.Evaluator[queryBuilder] {
 	return queryEvaluator{schemas: schemas}
 }
 
