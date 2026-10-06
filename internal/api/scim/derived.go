@@ -35,8 +35,7 @@ func (ref derived) resolve(schemas core.Schemas) Reference {
 	return ref
 }
 
-func (ref derived) extract(document core.Object) ([]uuid.UUID, error) {
-	document.Remove(ref.Name())
+func (ref derived) extract(any) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

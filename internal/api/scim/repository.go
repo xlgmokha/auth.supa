@@ -313,9 +313,10 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 	}
 	targets := map[string][]uuid.UUID{}
 	for _, ref := range r.references {
-		if targets[ref.Name()], err = ref.extract(document); err != nil {
+		if targets[ref.Name()], err = ref.extract(document.Get(ref.Name())); err != nil {
 			return "", nil, err
 		}
+		document.Remove(ref.Name())
 	}
 	raw, err := json.Marshal(document)
 	return string(raw), targets, err

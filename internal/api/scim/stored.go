@@ -22,7 +22,10 @@ func Stored(attribute string) Reference {
 }
 
 func (ref stored) Columns() map[string]string {
-	return map[string]string{query.ValueAttribute: "ref.target_id", "type": "lower(target.resource_type)"}
+	return map[string]string{
+		query.ValueAttribute: "ref.target_id",
+		"type":               "lower(target.resource_type)",
+	}
 }
 
 func (ref stored) Exists(inner string, args []any) (string, []any) {
@@ -38,13 +41,12 @@ func (ref stored) resolve(schemas core.Schemas) Reference {
 	return ref
 }
 
-func (ref stored) extract(document core.Object) ([]uuid.UUID, error) {
-	elements, _ := document.Get(ref.Name()).([]any)
-	document.Remove(ref.Name())
+func (ref stored) extract(attribute any) ([]uuid.UUID, error) {
+	elements, _ := attribute.([]any)
 	ids := make([]uuid.UUID, 0, len(elements))
 	seen := make(map[uuid.UUID]bool, len(elements))
 	for _, element := range elements {
-		value, _ := element.(map[string]any)["value"].(string)
+		value, _ := element.(map[string]any)[query.ValueAttribute].(string)
 		id, err := uuid.FromString(value)
 		if err != nil {
 			return nil, scimerrors.ErrInvalidValue(strconv.Quote(value) + " is not a valid " + ref.Name() + " value")

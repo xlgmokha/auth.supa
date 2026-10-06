@@ -11,7 +11,7 @@ import (
 type Reference interface {
 	query.Reference
 	resolve(schemas core.Schemas) Reference
-	extract(document core.Object) ([]uuid.UUID, error)
+	extract(attribute any) ([]uuid.UUID, error)
 	link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error
 	load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error)
 }
@@ -28,5 +28,9 @@ func (n named) canonical(schemas core.Schemas) (named, *core.Attribute) {
 }
 
 func element(id uuid.UUID, endpoint, kind string) map[string]any {
-	return map[string]any{query.ValueAttribute: id.String(), "$ref": endpoint + "/" + id.String(), "type": kind}
+	return map[string]any{
+		query.ValueAttribute: id.String(),
+		"$ref":               endpoint + "/" + id.String(),
+		"type":               kind,
+	}
 }
