@@ -114,7 +114,7 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 	}
 	common := item.Common()
 	saved, err := r.save(ctx, scope, targets, func(tx *storage.Connection) (*models.SCIMResource, error) {
-		return scope.Update(tx, uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
+		return scope.Update(tx, uuid.FromStringOrNil(common.ID), document, common.Meta.Version)
 	})
 	if models.IsNotFoundError(err) {
 		return zero, r.missing(ctx, common.ID)
@@ -133,7 +133,7 @@ func (r *repository[T]) Delete(ctx context.Context, item T) error {
 	common := item.Common()
 	id := uuid.FromStringOrNil(common.ID)
 	err = r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
-		if err := scope.Delete(tx, id, versionTime(common.Meta.Version)); err != nil {
+		if err := scope.Delete(tx, id, common.Meta.Version); err != nil {
 			return err
 		}
 		return scope.DeleteReferences(tx, id)

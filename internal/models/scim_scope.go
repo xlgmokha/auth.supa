@@ -3,7 +3,6 @@ package models
 import (
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/gobuffalo/pop/v6"
 	"github.com/gofrs/uuid"
@@ -52,11 +51,11 @@ func (s SCIMScope) Create(tx *storage.Connection, document string) (*SCIMResourc
 	return resource, scimUniqueness(err)
 }
 
-func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document string, version *time.Time) (*SCIMResource, error) {
+func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document, version string) (*SCIMResource, error) {
 	resource := &SCIMResource{}
 	if err := tx.RawQuery(
 		fmt.Sprintf("UPDATE %q SET resource = ?::jsonb, updated_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at) RETURNING *", resource.TableName()),
-		document, id, s.ProviderID, s.ResourceType, version,
+		document, id, s.ProviderID, s.ResourceType, scimVersionTime(version),
 	).First(resource); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, SCIMNotFoundError{}
@@ -66,10 +65,10 @@ func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document string,
 	return resource, nil
 }
 
-func (s SCIMScope) Delete(tx *storage.Connection, id uuid.UUID, version *time.Time) error {
+func (s SCIMScope) Delete(tx *storage.Connection, id uuid.UUID, version string) error {
 	count, err := tx.RawQuery(
 		fmt.Sprintf("UPDATE %q SET deleted_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at)", SCIMResource{}.TableName()),
-		id, s.ProviderID, s.ResourceType, version,
+		id, s.ProviderID, s.ResourceType, scimVersionTime(version),
 	).ExecWithCount()
 	if err != nil {
 		return errors.Wrap(err, "error deleting SCIM resource")

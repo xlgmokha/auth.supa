@@ -52,8 +52,8 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 }
 
 func (r *repository[T]) decode(row *models.SCIMResource, attributes map[string]any) (T, error) {
-	var item T
-	if err := json.Unmarshal(row.Resource, &item); err != nil {
+	item, err := row.As[T](r.locations[r.resourceType])
+	if err != nil {
 		return item, err
 	}
 	if len(attributes) > 0 {
@@ -64,15 +64,6 @@ func (r *repository[T]) decode(row *models.SCIMResource, attributes map[string]a
 		if err := json.Unmarshal(raw, &item); err != nil {
 			return item, err
 		}
-	}
-	common := item.Common()
-	common.ID = row.ID.String()
-	common.Meta = core.Meta{
-		ResourceType: core.ResourceTypeName(r.resourceType),
-		Created:      row.CreatedAt.UTC(),
-		LastModified: row.UpdatedAt.UTC(),
-		Location:     r.locations[r.resourceType] + "/" + common.ID,
-		Version:      version(row.UpdatedAt),
 	}
 	return item, nil
 }
