@@ -3,9 +3,6 @@ package scim
 import (
 	"encoding/json"
 	"maps"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
@@ -103,17 +100,4 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 	}
 	raw, err = json.Marshal(document)
 	return string(raw), targets, err
-}
-
-func version(t time.Time) string {
-	return `W/"` + strconv.FormatInt(t.UnixMicro(), 10) + `"`
-}
-
-func versionTime(version string) *time.Time {
-	micros, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(version, `W/"`), `"`), 10, 64)
-	if err != nil {
-		return nil
-	}
-	t := time.UnixMicro(micros).UTC()
-	return &t
 }
