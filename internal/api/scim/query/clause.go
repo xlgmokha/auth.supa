@@ -7,7 +7,7 @@ type clause interface {
 type jsonpath struct{ expr expr }
 
 func (j jsonpath) sql() (string, []any) {
-	return "lower(resource::text)::jsonb @@ ?::jsonpath", []any{j.expr.String()}
+	return "search @@ ?::jsonpath", []any{j.expr.String()}
 }
 
 type junction struct {

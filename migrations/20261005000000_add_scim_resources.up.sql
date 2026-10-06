@@ -4,6 +4,7 @@ create table if not exists {{ index .Options "Namespace" }}.scim_resources (
     sso_provider_id uuid not null references {{ index .Options "Namespace" }}.sso_providers (id) on delete cascade,
     resource_type text not null,
     resource jsonb not null,
+    search jsonb not null generated always as (lower(resource::text)::jsonb) stored,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     deleted_at timestamptz,
@@ -48,7 +49,7 @@ create index if not exists scim_resources_inactive_idx
 
 /* auth_migration: 20261005000000 */
 create index if not exists scim_resources_resource_idx
-    on {{ index .Options "Namespace" }}.scim_resources using gin ((lower(resource::text)::jsonb) jsonb_path_ops)
+    on {{ index .Options "Namespace" }}.scim_resources using gin (search jsonb_path_ops)
     where deleted_at is null;
 
 /* auth_migration: 20261005000000 */

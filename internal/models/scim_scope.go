@@ -13,6 +13,8 @@ import (
 	"github.com/supabase/auth/internal/storage"
 )
 
+const scimResourceColumns = "id, sso_provider_id, resource_type, resource, created_at, updated_at, deleted_at"
+
 type SCIMAncestor struct {
 	TargetID uuid.UUID `db:"target_id"`
 	SourceID uuid.UUID `db:"source_id"`
@@ -46,7 +48,7 @@ func (s SCIMScope) Find(tx *storage.Connection, id uuid.UUID) (*SCIMResource, er
 func (s SCIMScope) Create(tx *storage.Connection, document string) (*SCIMResource, error) {
 	resource := &SCIMResource{}
 	err := tx.RawQuery(
-		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource_type, resource) VALUES (?, ?, ?, ?::jsonb) RETURNING *", resource.TableName()),
+		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource_type, resource) VALUES (?, ?, ?, ?::jsonb) RETURNING %s", resource.TableName(), scimResourceColumns),
 		uuid.Must(uuid.NewV4()), s.ProviderID, s.ResourceType, document,
 	).First(resource)
 	return resource, scimUniqueness(err)
@@ -55,7 +57,7 @@ func (s SCIMScope) Create(tx *storage.Connection, document string) (*SCIMResourc
 func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document, version string) (*SCIMResource, error) {
 	resource := &SCIMResource{}
 	if err := tx.RawQuery(
-		fmt.Sprintf("UPDATE %q SET resource = ?::jsonb, updated_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at) RETURNING *", resource.TableName()),
+		fmt.Sprintf("UPDATE %q SET resource = ?::jsonb, updated_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at) RETURNING %s", resource.TableName(), scimResourceColumns),
 		document, id, s.ProviderID, s.ResourceType, scimVersionTime(version),
 	).First(resource); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
