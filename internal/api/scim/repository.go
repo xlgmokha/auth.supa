@@ -218,7 +218,7 @@ func (r *repository[T]) order(query *protocol.SearchRequest) (string, []any, err
 
 func (r *repository[T]) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets map[string][]uuid.UUID) error {
 	for _, ref := range r.references {
-		if err := ref.link(tx, scope, source, targets[ref.attribute]); err != nil {
+		if err := ref.link(tx, scope, source, targets[ref.name()]); err != nil {
 			return err
 		}
 	}
@@ -252,7 +252,7 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 			if elements[id] == nil {
 				elements[id] = map[string]any{}
 			}
-			elements[id][ref.attribute] = list
+			elements[id][ref.name()] = list
 		}
 	}
 	items := make([]T, 0, len(rows))
@@ -343,7 +343,7 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 	}
 	targets := map[string][]uuid.UUID{}
 	for _, ref := range r.references {
-		if targets[ref.attribute], err = ref.extract(document); err != nil {
+		if targets[ref.name()], err = ref.extract(document); err != nil {
 			return "", nil, err
 		}
 	}

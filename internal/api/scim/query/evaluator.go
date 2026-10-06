@@ -2,10 +2,8 @@ package query
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 
-	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/filter"
 	"github.com/supabase-community/scim-go/pkg/protocol"
@@ -26,7 +24,7 @@ func (e Evaluator) Compare(attribute *protocol.Attribute, op filter.Operator, va
 	if !ok {
 		return Builder{jsonpath{compare{e.path(attribute), op, value}}}, nil
 	}
-	leaf, err := ref.compare(attribute.Definition, op, value)
+	leaf, err := match(ref, attribute.Definition, op, value)
 	if err != nil {
 		return Builder{}, err
 	}
@@ -89,16 +87,16 @@ func (e Evaluator) reference(attribute *protocol.Attribute) (Reference, bool) {
 	if top == nil {
 		base := e.schemas.Base()
 		if attribute.Path.URI != "" && core.SchemaURI(attribute.Path.URI) != base.ID {
-			return Reference{}, false
+			return nil, false
 		}
 		top = base.Attributes.Lookup(attribute.Path.Name)
 	}
 	if top == nil {
-		return Reference{}, false
+		return nil, false
 	}
-	index := slices.IndexFunc(e.references, func(ref Reference) bool { return ref.Attribute == top.Name })
+	index := slices.IndexFunc(e.references, func(ref Reference) bool { return ref.name() == top.Name })
 	if index < 0 {
-		return Reference{}, false
+		return nil, false
 	}
 	return e.references[index], true
 }
@@ -119,31 +117,6 @@ func (e Evaluator) path(attribute *protocol.Attribute) path {
 		return path{root: root}
 	}
 	return path{"$", keys}
-}
-
-func (ref Reference) compare(definition *core.Attribute, op filter.Operator, value any) (clause, error) {
-	text, _ := value.(string)
-	if op != filter.OpEquals && op != filter.OpNotEquals {
-		return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.Attribute+"."+definition.Name) + " supports only eq and ne")
-	}
-	sign := map[filter.Operator]string{filter.OpEquals: " = ", filter.OpNotEquals: " <> "}[op]
-	switch {
-	case definition.Name == "value":
-		id, err := uuid.FromString(text)
-		if err != nil {
-			return predicate{text: strconv.FormatBool(op == filter.OpNotEquals)}, nil
-		}
-		column := "ref.target_id"
-		if ref.Via != "" {
-			column = "chain.source_id"
-		}
-		return predicate{column + sign + "?::uuid", []any{id.String()}}, nil
-	case definition.Name == "type" && ref.Via == "":
-		return predicate{"lower(target.resource_type)" + sign + "?", []any{strings.ToLower(text)}}, nil
-	case definition.Name == "type":
-		return predicate{"(CASE WHEN chain.depth = 1 THEN 'direct' ELSE 'indirect' END)" + sign + "?", []any{strings.ToLower(text)}}, nil
-	}
-	return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.Attribute+"."+definition.Name) + " cannot be filtered")
 }
 
 func jsonpaths(l, r Builder) (jsonpath, jsonpath, bool) {

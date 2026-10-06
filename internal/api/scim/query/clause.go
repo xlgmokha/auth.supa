@@ -38,24 +38,12 @@ type predicate struct {
 
 func (p predicate) sql() (string, []any) { return p.text, p.args }
 
-type Reference struct {
-	Attribute string
-	Via       string
-}
-
 type reference struct {
-	Reference
+	ref   Reference
 	inner clause
 }
 
 func (r reference) sql() (string, []any) {
 	inner, args := r.inner.sql()
-	if r.Via == "" {
-		return "EXISTS (SELECT 1 FROM scim_resource_references ref JOIN scim_resources target ON target.id = ref.target_id WHERE ref.source_id = scim_resources.id AND ref.attribute = ? AND " + inner + ")", append([]any{r.Attribute}, args...)
-	}
-	return `EXISTS (WITH RECURSIVE chain (source_id, depth) AS (
-		SELECT source_id, 1 FROM scim_resource_references WHERE target_id = scim_resources.id AND attribute = ?
-		UNION
-		SELECT ref.source_id, chain.depth + 1 FROM chain JOIN scim_resource_references ref ON ref.target_id = chain.source_id AND ref.attribute = ? WHERE chain.depth < 64
-	) SELECT 1 FROM chain WHERE ` + inner + ")", append([]any{r.Via, r.Via}, args...)
+	return r.ref.exists(inner, args)
 }
