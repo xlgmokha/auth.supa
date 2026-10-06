@@ -14,7 +14,6 @@ type SCIMReference struct {
 	SourceID   uuid.UUID `db:"source_id"`
 	TargetID   uuid.UUID `db:"target_id"`
 	TargetType string    `db:"target_type"`
-	Display    *string   `db:"display"`
 }
 
 type SCIMAncestor struct {
@@ -58,7 +57,7 @@ func (s SCIMScope) FindReferences(tx *storage.Connection, sources []uuid.UUID, a
 		return references, nil
 	}
 	err := tx.RawQuery(
-		fmt.Sprintf("SELECT r.source_id, r.target_id, t.resource_type AS target_type, t.resource->>'displayName' AS display FROM %q r JOIN %q t ON t.id = r.target_id WHERE r.source_id = any(?::uuid[]) AND r.attribute = ? ORDER BY r.source_id, r.target_id", SCIMReference{}.TableName(), SCIMResource{}.TableName()),
+		fmt.Sprintf("SELECT r.source_id, r.target_id, t.resource_type AS target_type FROM %q r JOIN %q t ON t.id = r.target_id WHERE r.source_id = any(?::uuid[]) AND r.attribute = ? ORDER BY r.source_id, r.target_id", SCIMReference{}.TableName(), SCIMResource{}.TableName()),
 		uuidStrings(sources), attribute,
 	).All(&references)
 	return references, errors.Wrap(err, "error finding SCIM references")
@@ -101,6 +100,16 @@ func (s SCIMScope) FindAncestors(tx *storage.Connection, targets []uuid.UUID, at
 		uuidStrings(targets), attribute, attribute,
 	).All(&ancestors)
 	return ancestors, errors.Wrap(err, "error finding SCIM ancestors")
+}
+
+func (s SCIMScope) DeleteReferences(tx *storage.Connection, id uuid.UUID) error {
+	table := SCIMReference{}.TableName()
+	for _, column := range []string{"source_id", "target_id"} {
+		if err := tx.RawQuery(fmt.Sprintf("DELETE FROM %q WHERE %s = ?", table, column), id).Exec(); err != nil {
+			return errors.Wrap(err, "error deleting SCIM references")
+		}
+	}
+	return nil
 }
 
 func uuidStrings(ids []uuid.UUID) []string {

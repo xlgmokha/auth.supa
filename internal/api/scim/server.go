@@ -19,6 +19,7 @@ type Server struct {
 }
 
 func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) http.Handler {
+	locations := map[string]string{"User": BaseURL(config) + "/Users", "Group": BaseURL(config) + "/Groups"}
 	cfg := core.NewServiceProviderConfig().Filtering(protocol.DefaultLimits.MaxCount).Patching().Sorting()
 	return &Server{
 		cfg: cfg,
@@ -31,16 +32,16 @@ func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) http.Ha
 			server.WithResource(server.
 				NewResource[*core.User]("User", "/Users", core.SchemaUser, core.UserAttributes()...).
 				WithExtension(core.SchemaEnterpriseUser, core.EnterpriseUserAttributes()...).
-				WithRepository(NewRepository[*core.User](db, "User", BaseURL(config)+"/Users", core.Schemas{
+				WithRepository(NewRepository[*core.User](db, "User", locations, core.Schemas{
 					core.NewSchema(core.SchemaUser).With(core.UserAttributes()...),
 					core.NewSchema(core.SchemaEnterpriseUser).With(core.EnterpriseUserAttributes()...),
 				})),
 			),
 			server.WithResource(server.
 				NewResource[*core.Group]("Group", "/Groups", core.SchemaGroup, core.GroupAttributes()...).
-				WithRepository(NewRepository[*core.Group](db, "Group", BaseURL(config)+"/Groups", core.Schemas{
+				WithRepository(NewRepository[*core.Group](db, "Group", locations, core.Schemas{
 					core.NewSchema(core.SchemaGroup).With(core.GroupAttributes()...),
-				})),
+				}, Stored("members"))),
 			),
 			server.WithAuthentication(core.NewOAuthBearerToken().AsPrimary(), newAuthenticate(db)),
 		),

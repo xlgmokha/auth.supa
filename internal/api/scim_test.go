@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -317,7 +318,7 @@ func TestSCIMGroups(t *testing.T) {
 		group := scimDecode[core.Group](t, res)
 		require.NotEmpty(t, group.ID)
 		require.Equal(t, displayName, group.DisplayName)
-		require.Equal(t, []core.Member{{Value: user.ID}}, group.Members)
+		require.Equal(t, []core.Member{scimMember(user)}, group.Members)
 	})
 
 	t.Run("GET returns a group", func(t *testing.T) {
@@ -352,7 +353,7 @@ func TestSCIMGroups(t *testing.T) {
 		group := create(t, user)
 
 		require.Equal(t, http.StatusNoContent, patch(t, group.ID, map[string]any{"op": "add", "path": "members", "value": []core.Member{{Value: other.ID}}}).StatusCode)
-		require.ElementsMatch(t, []core.Member{{Value: user.ID}, {Value: other.ID}}, c.group(t, group.ID).Members)
+		require.ElementsMatch(t, []core.Member{scimMember(user), scimMember(other)}, c.group(t, group.ID).Members)
 	})
 
 	t.Run("PATCH removes a member by filter", func(t *testing.T) {
@@ -360,7 +361,7 @@ func TestSCIMGroups(t *testing.T) {
 		group := create(t, user, other)
 
 		require.Equal(t, http.StatusNoContent, patch(t, group.ID, map[string]any{"op": "remove", "path": `members[value eq "` + user.ID + `"]`}).StatusCode)
-		require.Equal(t, []core.Member{{Value: other.ID}}, c.group(t, group.ID).Members)
+		require.Equal(t, []core.Member{scimMember(other)}, c.group(t, group.ID).Members)
 	})
 
 	t.Run("PATCH replaces displayName", func(t *testing.T) {
@@ -378,7 +379,7 @@ func TestSCIMGroups(t *testing.T) {
 
 		res := c.do(t, http.MethodPut, scimGroupsPath+"/"+group.ID, newSCIMGroup(group.DisplayName, other))
 		require.Equal(t, http.StatusOK, res.StatusCode)
-		require.Equal(t, []core.Member{{Value: other.ID}}, scimDecode[core.Group](t, res).Members)
+		require.Equal(t, []core.Member{scimMember(other)}, scimDecode[core.Group](t, res).Members)
 	})
 
 	t.Run("DELETE removes a group", func(t *testing.T) {
@@ -386,6 +387,79 @@ func TestSCIMGroups(t *testing.T) {
 
 		require.Equal(t, http.StatusNoContent, c.do(t, http.MethodDelete, scimGroupsPath+"/"+group.ID, nil).StatusCode)
 		require.Equal(t, http.StatusNotFound, c.get(t, scimGroupsPath+"/"+group.ID).StatusCode)
+	})
+
+	t.Run("DELETE of a user removes it from its groups", func(t *testing.T) {
+		user, other := createUser(t), createUser(t)
+		group := create(t, user, other)
+
+		require.Equal(t, http.StatusNoContent, c.do(t, http.MethodDelete, scimUsersPath+"/"+user.ID, nil).StatusCode)
+		require.Equal(t, []core.Member{scimMember(other)}, c.group(t, group.ID).Members)
+	})
+
+	t.Run("rejects members that are not live resources of the provider", func(t *testing.T) {
+		deleted := createUser(t)
+		require.Equal(t, http.StatusNoContent, c.do(t, http.MethodDelete, scimUsersPath+"/"+deleted.ID, nil).StatusCode)
+		foreign := newSCIMClient(t, nil).createUser(t, scimUserName("foreign"))
+		group := create(t)
+
+		for name, value := range map[string]string{"unknown": scimMissingID, "foreign": foreign.ID, "deleted": deleted.ID, "malformed": "bjensen"} {
+			members := []core.Member{{Value: value}}
+			t.Run("POST "+name, func(t *testing.T) {
+				body := newSCIMGroup("Tour Guides " + uuid.Must(uuid.NewV4()).String())
+				body["members"] = members
+				res := c.do(t, http.MethodPost, scimGroupsPath, body)
+				require.Equal(t, http.StatusBadRequest, res.StatusCode)
+				require.Contains(t, string(scimBody(t, res)), `"scimType":"invalidValue"`)
+			})
+			t.Run("PATCH "+name, func(t *testing.T) {
+				res := patch(t, group.ID, map[string]any{"op": "add", "path": "members", "value": members})
+				require.Equal(t, http.StatusBadRequest, res.StatusCode)
+				require.Contains(t, string(scimBody(t, res)), `"scimType":"invalidValue"`)
+			})
+		}
+		require.Empty(t, c.group(t, group.ID).Members)
+	})
+
+	t.Run("GET omits members when excluded", func(t *testing.T) {
+		group := create(t, createUser(t))
+
+		list := scimList[core.Group](t, c, scimGroupsPath, url.Values{"filter": {`id eq "` + group.ID + `"`}, "excludedAttributes": {"members"}})
+		require.Len(t, list.Resources, 1)
+		require.Empty(t, list.Resources[0].Members)
+	})
+
+	t.Run("concurrent blind PATCH adds keep every member", func(t *testing.T) {
+		group := create(t)
+		users := []core.User{createUser(t), createUser(t), createUser(t), createUser(t)}
+		statuses := make([]int, len(users))
+
+		var wg sync.WaitGroup
+		for i, user := range users {
+			wg.Go(func() {
+				for range 20 {
+					res, err := c.inst.DoAuth(scimRequest(t, http.MethodPatch, scimGroupsPath+"/"+group.ID, newSCIMPatch(map[string]any{"op": "add", "path": "members", "value": []core.Member{{Value: user.ID}}})), c.token)
+					if err != nil {
+						return
+					}
+					statuses[i] = res.StatusCode
+					_ = res.Body.Close()
+					if res.StatusCode != http.StatusConflict {
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+
+		for _, status := range statuses {
+			require.Equal(t, http.StatusNoContent, status)
+		}
+		members := []core.Member{}
+		for _, user := range users {
+			members = append(members, scimMember(user))
+		}
+		require.ElementsMatch(t, members, c.group(t, group.ID).Members)
 	})
 }
 
@@ -428,6 +502,7 @@ func TestSCIMErrors(t *testing.T) {
 		{"PATCH unknown path", http.MethodPatch, scimUsersPath + "/" + user.ID, newSCIMPatch(map[string]any{"op": "replace", "path": "nope", "value": "x"}), http.StatusBadRequest},
 		{"GET users with an invalid filter", http.MethodGet, scimUsersPath + "?" + url.Values{"filter": {"userName eq"}}.Encode(), nil, http.StatusBadRequest},
 		{"GET groups with an invalid filter", http.MethodGet, scimGroupsPath + "?" + url.Values{"filter": {"displayName eq"}}.Encode(), nil, http.StatusBadRequest},
+		{"GET groups with an unsupported members filter", http.MethodGet, scimGroupsPath + "?" + url.Values{"filter": {`members.value co "x"`}}.Encode(), nil, http.StatusBadRequest},
 		{"GET users with an unknown sortBy", http.MethodGet, scimUsersPath + "?sortBy=nope", nil, http.StatusBadRequest},
 		{"POST /.search", http.MethodPost, "/scim/v2/.search", map[string]any{}, http.StatusNotImplemented},
 		{"POST /Users/.search", http.MethodPost, scimUsersPath + "/.search", map[string]any{}, http.StatusNotImplemented},
@@ -565,6 +640,10 @@ func TestSCIMFilters(t *testing.T) {
 		{scimGroupsPath, `displayName eq "Tour Guides"`, group.ID},
 		{scimGroupsPath, `members.value eq "` + user.ID + `"`, group.ID},
 		{scimGroupsPath, `members[value eq "` + user.ID + `"]`, group.ID},
+		{scimGroupsPath, `members[type eq "user" and value eq "` + user.ID + `"]`, group.ID},
+		{scimGroupsPath, `displayName eq "Tour Guides" and members[value eq "` + user.ID + `"]`, group.ID},
+		{scimGroupsPath, `externalId eq "tour-guides" and members pr`, group.ID},
+		{scimGroupsPath, `not (members[value eq "` + decoy.ID + `"])`, group.ID},
 	} {
 		t.Run(tc.filter, func(t *testing.T) {
 			list := scimList[core.Base](t, c, tc.path, url.Values{"filter": {tc.filter}})
@@ -831,6 +910,10 @@ func newSCIMGroup(displayName string, members ...core.User) map[string]any {
 		"displayName": displayName,
 		"members":     values,
 	}
+}
+
+func scimMember(user core.User) core.Member {
+	return core.Member{Value: user.ID, Ref: user.Meta.Location, Type: "User"}
 }
 
 func newSCIMPatch(operations ...map[string]any) map[string]any {
