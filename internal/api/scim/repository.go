@@ -39,7 +39,11 @@ func NewRepository[T core.Resource](db *storage.Connection, resourceType string,
 }
 
 func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest) ([]T, int, error) {
-	q, err := r.filter(ctx, query.Filter)
+	scope, err := r.scope(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	q, err := r.filter(r.db.WithContext(ctx), scope, query.Filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -48,10 +52,6 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 		return []T{}, total, err
 	}
 	rows, err := r.page(q, query)
-	if err != nil {
-		return nil, 0, err
-	}
-	scope, err := r.scope(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -93,17 +93,8 @@ func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	var saved T
-	err = r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
-		row, err := scope.Create(tx, document)
-		if err != nil {
-			return err
-		}
-		if err := r.link(tx, scope, row.ID, targets); err != nil {
-			return err
-		}
-		saved, err = r.decodeOne(tx, scope, row)
-		return err
+	saved, err := r.save(ctx, scope, targets, func(tx *storage.Connection) (*models.SCIMResource, error) {
+		return scope.Create(tx, document)
 	})
 	if err != nil {
 		return zero, invalid(err)
@@ -122,17 +113,8 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 		return zero, err
 	}
 	common := item.Common()
-	var saved T
-	err = r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
-		row, err := scope.Update(tx, uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
-		if err != nil {
-			return err
-		}
-		if err := r.link(tx, scope, row.ID, targets); err != nil {
-			return err
-		}
-		saved, err = r.decodeOne(tx, scope, row)
-		return err
+	saved, err := r.save(ctx, scope, targets, func(tx *storage.Connection) (*models.SCIMResource, error) {
+		return scope.Update(tx, uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
 	})
 	if models.IsNotFoundError(err) {
 		return zero, r.missing(ctx, common.ID)
@@ -207,6 +189,22 @@ func (r *repository[T]) order(request *protocol.SearchRequest) (string, []any, e
 	return `lower(resource #>> ?::text[]) COLLATE "C"` + direction + ", id", []any{textArray(keys)}, nil
 }
 
+func (r *repository[T]) save(ctx context.Context, scope models.SCIMScope, targets map[string][]uuid.UUID, write func(*storage.Connection) (*models.SCIMResource, error)) (T, error) {
+	var saved T
+	err := r.db.WithContext(ctx).Transaction(func(tx *storage.Connection) error {
+		row, err := write(tx)
+		if err != nil {
+			return err
+		}
+		if err := r.link(tx, scope, row.ID, targets); err != nil {
+			return err
+		}
+		saved, err = r.decodeOne(tx, scope, row)
+		return err
+	})
+	return saved, err
+}
+
 func (r *repository[T]) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets map[string][]uuid.UUID) error {
 	for _, ref := range r.references {
 		if err := ref.link(tx, scope, source, targets[ref.name()]); err != nil {
@@ -216,12 +214,8 @@ func (r *repository[T]) link(tx *storage.Connection, scope models.SCIMScope, sou
 	return nil
 }
 
-func (r *repository[T]) filter(ctx context.Context, expression string) (*pop.Query, error) {
-	scope, err := r.scope(ctx)
-	if err != nil {
-		return nil, err
-	}
-	q := scope.Query(r.db.WithContext(ctx))
+func (r *repository[T]) filter(tx *storage.Connection, scope models.SCIMScope, expression string) (*pop.Query, error) {
+	q := scope.Query(tx)
 	if expression == "" {
 		return q, nil
 	}
