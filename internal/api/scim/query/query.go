@@ -6,10 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobuffalo/pop/v6"
-	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/filter"
-	"github.com/supabase-community/scim-go/pkg/protocol"
 )
 
 var variables = map[string]string{
@@ -106,75 +103,6 @@ func (e exists) String() string {
 }
 
 func (e exists) variables() bool { return e.inner.variables() }
-
-type queryBuilder struct {
-	expr expr
-}
-
-func (b queryBuilder) Scope(q *pop.Query) *pop.Query {
-	if b.expr.variables() {
-		return q.Where("jsonb_path_match(lower(resource::text)::jsonb, ?::jsonpath, jsonb_build_object('id', id, 'created', created_at, 'lastmodified', updated_at))", b.expr.String())
-	}
-	return q.Where("lower(resource::text)::jsonb @@ ?::jsonpath", b.expr.String())
-}
-
-func (b queryBuilder) Build(q *pop.Query) *pop.Query {
-	return q.Scope(b.Scope)
-}
-
-type queryEvaluator struct {
-	schemas core.Schemas
-}
-
-func NewEvaluator(schemas core.Schemas) protocol.Evaluator[queryBuilder] {
-	return queryEvaluator{schemas: schemas}
-}
-
-func (e queryEvaluator) Compare(attribute *protocol.Attribute, op filter.Operator, value any) (queryBuilder, error) {
-	return queryBuilder{compare{e.path(attribute), op, value}}, nil
-}
-
-func (e queryEvaluator) Present(attribute *protocol.Attribute) (queryBuilder, error) {
-	return queryBuilder{present{e.path(attribute)}}, nil
-}
-
-func (e queryEvaluator) And(l, r queryBuilder) (queryBuilder, error) {
-	return queryBuilder{and{l.expr, r.expr}}, nil
-}
-
-func (e queryEvaluator) Or(l, r queryBuilder) (queryBuilder, error) {
-	return queryBuilder{or{l.expr, r.expr}}, nil
-}
-
-func (e queryEvaluator) Not(operand queryBuilder) (queryBuilder, error) {
-	return queryBuilder{not{operand.expr}}, nil
-}
-
-func (e queryEvaluator) ValuePath(attribute *protocol.Attribute, valueFilter func() (queryBuilder, error)) (queryBuilder, error) {
-	inner, err := valueFilter()
-	if err != nil {
-		return inner, err
-	}
-	return queryBuilder{exists{e.path(attribute), inner.expr}}, nil
-}
-
-func (e queryEvaluator) path(attribute *protocol.Attribute) path {
-	if attribute.Parent != nil {
-		return path{"@", []string{attribute.Definition.Name}}
-	}
-	keys := []string{attribute.Definition.Name}
-	if top, ok := e.schemas.Resolve(core.SchemaURI(attribute.Path.URI), attribute.Path.Name, ""); ok && top != attribute.Definition {
-		keys = []string{top.Name, attribute.Definition.Name}
-	}
-	schema := e.schemas.Lookup(core.SchemaURI(attribute.Path.URI))
-	if e.schemas.IsExtension(schema) {
-		return path{"$", append([]string{string(schema.ID)}, keys...)}
-	}
-	if root, ok := variables[strings.Join(keys, ".")]; ok {
-		return path{root: root}
-	}
-	return path{"$", keys}
-}
 
 func literal(value any) string {
 	switch v := value.(type) {
