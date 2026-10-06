@@ -49,7 +49,7 @@ func (ref stored) extract(attribute any) ([]uuid.UUID, error) {
 		value, _ := element.(map[string]any)[query.ValueAttribute].(string)
 		id, err := uuid.FromString(value)
 		if err != nil {
-			return nil, scimerrors.ErrInvalidValue(strconv.Quote(value) + " is not a valid " + ref.Name() + " value")
+			return nil, ref.invalidValue(value)
 		}
 		if !seen[id] {
 			seen[id] = true
@@ -72,10 +72,8 @@ func (ref stored) link(tx *storage.Connection, scope models.SCIMScope, source uu
 	if err != nil {
 		return err
 	}
-	for _, id := range add {
-		if !slices.Contains(added, id) {
-			return scimerrors.ErrInvalidValue(strconv.Quote(id.String()) + " is not a valid " + ref.Name() + " value")
-		}
+	if i := slices.IndexFunc(add, func(id uuid.UUID) bool { return !slices.Contains(added, id) }); i >= 0 {
+		return ref.invalidValue(add[i].String())
 	}
 	return scope.RemoveReferences(tx, source, ref.Name(), remove)
 }
@@ -103,6 +101,10 @@ func (ref stored) load(tx *storage.Connection, scope models.SCIMScope, ids []uui
 		elements[reference.SourceID] = append(elements[reference.SourceID], element(reference.TargetID, locations[reference.TargetType], reference.TargetType))
 	}
 	return elements, err
+}
+
+func (ref stored) invalidValue(value string) error {
+	return scimerrors.ErrInvalidValue(strconv.Quote(value) + " is not a valid " + ref.Name() + " value")
 }
 
 func diff(current []models.SCIMReference, wanted []uuid.UUID) (add, remove []uuid.UUID) {
