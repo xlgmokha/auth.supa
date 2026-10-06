@@ -7,9 +7,6 @@ type clause interface {
 type jsonpath struct{ expr expr }
 
 func (j jsonpath) sql() (string, []any) {
-	if j.expr.variables() {
-		return "jsonb_path_match(lower(resource::text)::jsonb, ?::jsonpath, jsonb_build_object('id', id, 'created', created_at, 'lastmodified', updated_at))", []any{j.expr.String()}
-	}
 	return "lower(resource::text)::jsonb @@ ?::jsonpath", []any{j.expr.String()}
 }
 

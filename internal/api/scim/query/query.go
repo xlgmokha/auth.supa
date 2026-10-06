@@ -4,16 +4,9 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/supabase-community/scim-go/pkg/filter"
 )
-
-var variables = map[string]string{
-	"id":                "$id",
-	"meta.created":      "$created",
-	"meta.lastModified": "$lastmodified",
-}
 
 var operators = map[filter.Operator]string{
 	filter.OpEquals:            "==",
@@ -26,7 +19,6 @@ var operators = map[filter.Operator]string{
 
 type expr interface {
 	String() string
-	variables() bool
 }
 
 type path struct {
@@ -40,14 +32,7 @@ func (p path) String() string {
 	for _, key := range p.keys {
 		s.WriteString("." + quote(strings.ToLower(key)))
 	}
-	if p.variables() && p.root != "$id" {
-		s.WriteString(".datetime()")
-	}
 	return s.String()
-}
-
-func (p path) variables() bool {
-	return p.root != "$" && p.root != "@"
 }
 
 type compare struct {
@@ -68,30 +53,23 @@ func (c compare) String() string {
 	return c.path.String() + " " + operators[c.op] + " " + literal(c.value)
 }
 
-func (c compare) variables() bool { return c.path.variables() }
-
 type present struct{ path path }
 
 func (p present) String() string {
 	return "exists(" + p.path.String() + ` ? (@.type() != "null" && !(@.type() == "string" && @ == "")))`
 }
 
-func (p present) variables() bool { return p.path.variables() }
-
 type and struct{ l, r expr }
 
-func (a and) String() string  { return "(" + a.l.String() + " && " + a.r.String() + ")" }
-func (a and) variables() bool { return a.l.variables() || a.r.variables() }
+func (a and) String() string { return "(" + a.l.String() + " && " + a.r.String() + ")" }
 
 type or struct{ l, r expr }
 
-func (o or) String() string  { return "(" + o.l.String() + " || " + o.r.String() + ")" }
-func (o or) variables() bool { return o.l.variables() || o.r.variables() }
+func (o or) String() string { return "(" + o.l.String() + " || " + o.r.String() + ")" }
 
 type not struct{ x expr }
 
-func (n not) String() string  { return "!(" + n.x.String() + ")" }
-func (n not) variables() bool { return n.x.variables() }
+func (n not) String() string { return "!(" + n.x.String() + ")" }
 
 type exists struct {
 	path  path
@@ -102,12 +80,8 @@ func (e exists) String() string {
 	return "exists(" + e.path.String() + "[*] ? (" + e.inner.String() + "))"
 }
 
-func (e exists) variables() bool { return e.inner.variables() }
-
 func literal(value any) string {
 	switch v := value.(type) {
-	case time.Time:
-		return quote(v.UTC().Format("2006-01-02T15:04:05.999999-07:00")) + ".datetime()"
 	case string:
 		return quote(strings.ToLower(v))
 	}

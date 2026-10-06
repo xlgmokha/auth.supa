@@ -20,6 +20,10 @@ func NewEvaluator(schemas core.Schemas, references ...Reference) protocol.Evalua
 }
 
 func (e Evaluator) Compare(attribute *protocol.Attribute, op filter.Operator, value any) (Builder, error) {
+	if name, ok := e.column(attribute); ok {
+		leaf, err := column(name, op, value)
+		return Builder{leaf}, err
+	}
 	ref, ok := e.reference(attribute)
 	if !ok {
 		return Builder{jsonpath{compare{e.path(attribute), op, value}}}, nil
@@ -32,6 +36,9 @@ func (e Evaluator) Compare(attribute *protocol.Attribute, op filter.Operator, va
 }
 
 func (e Evaluator) Present(attribute *protocol.Attribute) (Builder, error) {
+	if _, ok := e.column(attribute); ok {
+		return Builder{predicate{text: "TRUE"}}, nil
+	}
 	ref, ok := e.reference(attribute)
 	if !ok {
 		return Builder{jsonpath{present{e.path(attribute)}}}, nil
@@ -105,18 +112,28 @@ func (e Evaluator) path(attribute *protocol.Attribute) path {
 	if attribute.Parent != nil {
 		return path{"@", []string{attribute.Definition.Name}}
 	}
-	keys := []string{attribute.Definition.Name}
-	if top, ok := e.schemas.Resolve(core.SchemaURI(attribute.Path.URI), attribute.Path.Name, ""); ok && top != attribute.Definition {
-		keys = []string{top.Name, attribute.Definition.Name}
-	}
+	keys := e.keys(attribute)
 	schema := e.schemas.Lookup(core.SchemaURI(attribute.Path.URI))
 	if e.schemas.IsExtension(schema) {
 		return path{"$", append([]string{string(schema.ID)}, keys...)}
 	}
-	if root, ok := variables[strings.Join(keys, ".")]; ok {
-		return path{root: root}
-	}
 	return path{"$", keys}
+}
+
+func (e Evaluator) column(attribute *protocol.Attribute) (string, bool) {
+	if attribute.Parent != nil || e.schemas.IsExtension(e.schemas.Lookup(core.SchemaURI(attribute.Path.URI))) {
+		return "", false
+	}
+	name := strings.Join(e.keys(attribute), ".")
+	_, ok := Columns[name]
+	return name, ok
+}
+
+func (e Evaluator) keys(attribute *protocol.Attribute) []string {
+	if top, ok := e.schemas.Resolve(core.SchemaURI(attribute.Path.URI), attribute.Path.Name, ""); ok && top != attribute.Definition {
+		return []string{top.Name, attribute.Definition.Name}
+	}
+	return []string{attribute.Definition.Name}
 }
 
 func jsonpaths(l, r Builder) (jsonpath, jsonpath, bool) {

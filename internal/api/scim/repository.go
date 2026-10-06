@@ -17,12 +17,6 @@ import (
 	"github.com/supabase/auth/internal/storage"
 )
 
-var columns = map[string]string{
-	"id":                "id",
-	"meta.created":      "created_at",
-	"meta.lastModified": "updated_at",
-}
-
 type repository[T core.Resource] struct {
 	db           *storage.Connection
 	resourceType string
@@ -183,23 +177,23 @@ func (r *repository[T]) missing(ctx context.Context, id string) error {
 	return scimerrors.ErrPreconditionFailed("resource has changed on the server")
 }
 
-func (r *repository[T]) order(query *protocol.SearchRequest) (string, []any, error) {
-	if query.SortBy == "" {
+func (r *repository[T]) order(request *protocol.SearchRequest) (string, []any, error) {
+	if request.SortBy == "" {
 		return "created_at, id", nil, nil
 	}
-	parent, attribute, err := query.SortAttribute(r.schemas)
+	parent, attribute, err := request.SortAttribute(r.schemas)
 	if err != nil {
 		return "", nil, err
 	}
 	direction := " ASC"
-	if query.Descending() {
+	if request.Descending() {
 		direction = " DESC"
 	}
 	keys := []string{parent.Name}
 	if parent != attribute {
 		keys = append(keys, attribute.Name)
 	}
-	if column, ok := columns[strings.Join(keys, ".")]; ok {
+	if column, ok := query.Columns[strings.Join(keys, ".")]; ok {
 		return column + direction + ", id", nil, nil
 	}
 	if parent.MultiValued {

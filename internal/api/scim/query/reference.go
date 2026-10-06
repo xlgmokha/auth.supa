@@ -23,7 +23,7 @@ func match(ref Reference, definition *core.Attribute, op filter.Operator, value 
 	if op != filter.OpEquals && op != filter.OpNotEquals {
 		return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.name()+"."+definition.Name) + " supports only eq and ne")
 	}
-	sign := map[filter.Operator]string{filter.OpEquals: " = ", filter.OpNotEquals: " <> "}[op]
+	sign := comparisons[op]
 	column, ok := ref.columns()[definition.Name]
 	if !ok {
 		return nil, scimerrors.ErrInvalidFilter(strconv.Quote(ref.name()+"."+definition.Name) + " cannot be filtered")
