@@ -465,6 +465,10 @@ func TestSCIMGroups(t *testing.T) {
 			require.Equal(t, user.ID, list.Resources[0].ID)
 			require.Equal(t, groups, list.Resources[0].Groups)
 		}
+		for group, want := range map[string]int{parent.ID: 0, uuid.Must(uuid.NewV4()).String(): 1} {
+			filter := `userName eq "` + user.UserName + `" and not (groups.value eq "` + group + `")`
+			require.Len(t, scimList[core.User](t, c, scimUsersPath, url.Values{"filter": {filter}}).Resources, want, filter)
+		}
 
 		require.Equal(t, http.StatusNoContent, c.do(t, http.MethodDelete, scimGroupsPath+"/"+child.ID, nil).StatusCode)
 		require.Empty(t, c.user(t, user.ID).Groups)
