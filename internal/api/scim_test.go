@@ -68,8 +68,7 @@ func TestSCIM(t *testing.T) {
 	}
 
 	t.Run("ServiceProviderConfig matches the fixture", func(t *testing.T) {
-		fixture, err := os.ReadFile("testdata/scim/service_provider_config.json")
-		require.NoError(t, err)
+		fixture := scimFixture(t, "service_provider_config.json")
 
 		res := c.get(t, scimServiceProviderConfigPath)
 		require.JSONEq(t, string(fixture), string(scimBody(t, res)))
@@ -826,8 +825,7 @@ func TestSCIMOktaReplay(t *testing.T) {
 }
 
 func scimReplay(t *testing.T, c scimClient, file, created string, ids map[string]string, check func(t *testing.T, step, id string)) {
-	raw, err := os.ReadFile("testdata/scim/" + file)
-	require.NoError(t, err)
+	raw := scimFixture(t, file)
 	var steps []struct {
 		Step     string `json:"step"`
 		Requests []struct {
@@ -945,6 +943,15 @@ func (c scimClient) requireGroup(t *testing.T, id, displayName string, members .
 		values = append(values, member.Value)
 	}
 	require.ElementsMatch(t, members, values)
+}
+
+func scimFixture(t *testing.T, name string) []byte {
+	root, err := os.OpenRoot("testdata/scim")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+	raw, err := root.ReadFile(name)
+	require.NoError(t, err)
+	return raw
 }
 
 func scimList[T any](t *testing.T, c scimClient, path string, query url.Values) protocol.ListResponse[T] {
