@@ -138,10 +138,7 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 		api.oauthServer = oauthserver.NewServer(globalConfig, db, api.tokenService)
 	}
 
-	api.scim = scim.NewServer(db, globalConfig, &scimUserSync{api: api},
-		scim.LimitInvalidTokens(scim.NewTokenValidator(db), api.limitedSCIMInvalidToken(api.limiterOpts.SCIMIP)),
-		api.limitSCIMByProvider(api.limiterOpts.SCIM),
-	)
+	api.scim = scim.NewServer(globalConfig, db)
 
 	if api.config.Password.HIBP.Enabled {
 		httpClient := &http.Client{
@@ -480,7 +477,6 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 
 		r.Route(scim.BasePath, func(r *router) {
 			r.Use(api.requireScimServerEnabled)
-			r.Use(scim.WithRequest)
 			r.UseBypass(api.limitSCIMByIP(api.limiterOpts.SCIMIP))
 			r.chi.Handle("/*", api.scim)
 		})

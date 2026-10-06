@@ -39,14 +39,14 @@ func (a *API) adminSCIMGet(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *API) adminSCIMEnable(w http.ResponseWriter, r *http.Request) error {
-	return a.setSCIM(w, r, true)
+	return a.toggleSCIM(w, r, true)
 }
 
 func (a *API) adminSCIMDisable(w http.ResponseWriter, r *http.Request) error {
-	return a.setSCIM(w, r, false)
+	return a.toggleSCIM(w, r, false)
 }
 
-func (a *API) setSCIM(w http.ResponseWriter, r *http.Request, enabled bool) error {
+func (a *API) toggleSCIM(w http.ResponseWriter, r *http.Request, enabled bool) error {
 	verb := "disabling"
 	if enabled {
 		verb = "enabling"

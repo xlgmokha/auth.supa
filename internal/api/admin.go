@@ -12,7 +12,6 @@ import (
 	"github.com/sethvargo/go-password/password"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/provider"
-	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/observability"
 	"github.com/supabase/auth/internal/storage"
@@ -628,10 +627,6 @@ func (a *API) adminUserDelete(w http.ResponseWriter, r *http.Request) error {
 				return apierrors.NewInternalServerError("Error soft deleting user").WithInternalError(terr)
 			}
 
-			if terr := scim.DeleteUsers(a.config, tx, r, adminUser, user.ID); terr != nil {
-				return apierrors.NewInternalServerError("Error deleting user's SCIM users").WithInternalError(terr)
-			}
-
 			if terr := user.SoftDeleteUserIdentities(tx); terr != nil {
 				return apierrors.NewInternalServerError("Error soft deleting user identities").WithInternalError(terr)
 			}
@@ -649,9 +644,6 @@ func (a *API) adminUserDelete(w http.ResponseWriter, r *http.Request) error {
 				return apierrors.NewInternalServerError("Error deleting user's sessions").WithInternalError(terr)
 			}
 		} else {
-			if terr := scim.DeleteUsers(a.config, tx, r, adminUser, user.ID); terr != nil {
-				return apierrors.NewInternalServerError("Error deleting user's SCIM users").WithInternalError(terr)
-			}
 			if terr := tx.Destroy(user); terr != nil {
 				return apierrors.NewInternalServerError("Database error deleting user").WithInternalError(terr)
 			}

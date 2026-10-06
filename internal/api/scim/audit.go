@@ -22,11 +22,3 @@ func audit(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Req
 	event.Traits["outcome"] = "success"
 	return models.NewAuditLogEntry(config.AuditLog, r, tx, event.Actor, event.Action, utilities.GetIPAddress(r), event.Traits)
 }
-
-func actorFrom(r *http.Request) *models.User {
-	prefix := ""
-	if token := tokenKey.Value(r.Context()); token != nil {
-		prefix = token.Prefix
-	}
-	return &models.User{Email: storage.NullString("scim:" + prefix)}
-}

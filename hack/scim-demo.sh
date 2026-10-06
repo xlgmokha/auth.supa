@@ -120,8 +120,8 @@ call 200 GET "$SCIM/Groups/$GROUP" "$SCIM_TOKEN"
 
 section "Errors"
 call 409 POST "$SCIM/Users" "$SCIM_TOKEN" "$(user "$BJENSEN" Barbara Jensen)"
-call 400 GET "$SCIM/Users?filter=$(uri 'emails co "example.com"')" "$SCIM_TOKEN"
-call 400 GET "$SCIM/Users?sortBy=title" "$SCIM_TOKEN"
+call 400 GET "$SCIM/Users?filter=$(uri 'userName eq')" "$SCIM_TOKEN"
+call 400 GET "$SCIM/Users?sortBy=nope" "$SCIM_TOKEN"
 call 404 GET "$SCIM/Users/00000000-0000-0000-0000-000000000000" "$SCIM_TOKEN"
 call 401 GET "$SCIM/Users" "not-a-token"
 

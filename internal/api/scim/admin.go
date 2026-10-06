@@ -48,6 +48,30 @@ func RevokeToken(config *conf.GlobalConfiguration, tx *storage.Connection, r *ht
 	return token, audit(config, tx, r, tokenEvent(actor, models.SCIMTokenRevokedAction, token))
 }
 
+func Deprovision(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, actor *models.User, provider *models.SSOProvider) error {
+	if !config.SSO.SCIM.Enabled {
+		return nil
+	}
+	enabled, err := models.IsSCIMEnabled(tx, provider.ID)
+	if err != nil || !enabled {
+		return err
+	}
+	tokens, err := models.FindActiveSCIMTokensBySSOProvider(tx, provider.ID)
+	if err != nil {
+		return err
+	}
+	prefixes := make([]string, len(tokens))
+	for i, token := range tokens {
+		prefixes[i] = token.Prefix
+	}
+	return audit(config, tx, r, auditEvent{
+		Actor:      actor,
+		Action:     models.SCIMDisabledAction,
+		ProviderID: provider.ID,
+		Traits:     map[string]any{"token_prefixes": prefixes},
+	})
+}
+
 func revokeToken(tx *storage.Connection, providerID uuid.UUID, tokenID string) (*models.SCIMToken, bool, error) {
 	id, err := uuid.FromString(tokenID)
 	if err != nil {
@@ -74,45 +98,4 @@ func tokenEvent(actor *models.User, action models.AuditAction, token *models.SCI
 		ProviderID: token.SSOProviderID,
 		Traits:     map[string]any{"token_id": token.ID, "token_prefix": token.Prefix, "expires_at": token.ExpiresAt},
 	}
-}
-
-func Deprovision(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, actor *models.User, provider *models.SSOProvider) error {
-	if !config.SSO.SCIM.Enabled {
-		return nil
-	}
-	enabled, err := models.IsSCIMEnabled(tx, provider.ID)
-	if err != nil || !enabled {
-		return err
-	}
-	tokens, err := models.FindActiveSCIMTokensBySSOProvider(tx, provider.ID)
-	if err != nil {
-		return err
-	}
-	prefixes := make([]string, len(tokens))
-	for i, token := range tokens {
-		prefixes[i] = token.Prefix
-	}
-	return audit(config, tx, r, auditEvent{
-		Actor:      actor,
-		Action:     models.SCIMDisabledAction,
-		ProviderID: provider.ID,
-		Traits:     map[string]any{"token_prefixes": prefixes},
-	})
-}
-
-func DeleteUsers(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, actor *models.User, userID uuid.UUID) error {
-	rows, err := models.SoftDeleteSCIMUsersByUserID(tx, userID)
-	if err != nil {
-		return err
-	}
-	for i := range rows {
-		if err := models.RemoveSCIMMemberFromGroups(tx, rows[i].ID); err != nil {
-			return err
-		}
-		event := auditEvent{Actor: actor, Action: models.SCIMUserDeletedAction, ProviderID: rows[i].SSOProviderID, Traits: userTraits(&rows[i], &userID)}
-		if err := audit(config, tx, r, event); err != nil {
-			return err
-		}
-	}
-	return nil
 }
