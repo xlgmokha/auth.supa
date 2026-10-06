@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/gofrs/uuid"
 	"github.com/supabase/auth/internal/api/apierrors"
-	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/observability"
 	"github.com/supabase/auth/internal/storage"
@@ -454,9 +453,6 @@ func (a *API) adminSSOProvidersDelete(w http.ResponseWriter, r *http.Request) er
 	provider := getSSOProvider(ctx)
 
 	if err := db.Transaction(func(tx *storage.Connection) error {
-		if err := scim.Deprovision(a.config, tx, r, getAdminUser(ctx), provider); err != nil {
-			return err
-		}
 		return tx.Eager().Destroy(provider)
 	}); err != nil {
 		return err

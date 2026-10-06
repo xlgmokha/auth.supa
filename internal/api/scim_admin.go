@@ -47,18 +47,14 @@ func (a *API) adminSCIMDisable(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *API) toggleSCIM(w http.ResponseWriter, r *http.Request, enabled bool) error {
-	verb := "disabling"
-	if enabled {
-		verb = "enabling"
-	}
 	ctx := r.Context()
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
 	if err := db.Transaction(func(tx *storage.Connection) error {
-		return scim.SetEnabled(a.config, tx, r, getAdminUser(ctx), provider.ID, enabled)
+		return scim.SetEnabled(tx, provider.ID, enabled)
 	}); err != nil {
-		return apierrors.NewInternalServerError("Error %s SCIM", verb).WithInternalError(err)
+		return apierrors.NewInternalServerError("Error toggling SCIM").WithInternalError(err)
 	}
 
 	return a.sendSCIMStatus(w, db, provider)
@@ -80,7 +76,7 @@ func (a *API) adminSCIMTokensCreate(w http.ResponseWriter, r *http.Request) erro
 	var plaintext string
 	err := db.Transaction(func(tx *storage.Connection) error {
 		var terr error
-		token, plaintext, terr = scim.CreateToken(a.config, tx, r, getAdminUser(ctx), provider, params.ExpiresAt)
+		token, plaintext, terr = scim.CreateToken(tx, provider, params.ExpiresAt)
 		return terr
 	})
 	if err != nil {
@@ -117,7 +113,7 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	var token *models.SCIMToken
 	err := db.Transaction(func(tx *storage.Connection) error {
 		var terr error
-		token, terr = scim.RevokeToken(a.config, tx, r, getAdminUser(ctx), provider.ID, chi.URLParam(r, "token_id"))
+		token, terr = scim.RevokeToken(tx, provider.ID, chi.URLParam(r, "token_id"))
 		return terr
 	})
 	if err != nil {
