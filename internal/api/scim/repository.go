@@ -41,40 +41,61 @@ func NewRepository[T core.Resource](db *storage.Connection, resourceType, endpoi
 }
 
 func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest) ([]T, int, error) {
-	scope, err := r.scope(ctx)
+	q, err := r.filter(ctx, query.Filter)
 	if err != nil {
 		return nil, 0, err
-	}
-	q := scope.Query(r.db.WithContext(ctx))
-	if query.Filter != "" {
-		builder, err := protocol.Filter(r.schemas, query.Filter, newEvaluator(r.schemas))
-		if err != nil {
-			return nil, 0, err
-		}
-		q = q.Scope(builder.Scope)
 	}
 	if query.Count == 0 {
 		total, err := q.Count(&models.SCIMResource{})
 		return []T{}, total, err
 	}
-	order, args, err := r.order(query)
+	rows, err := r.page(q, query)
 	if err != nil {
 		return nil, 0, err
 	}
-	q.Paginator = &pop.Paginator{PerPage: query.Count, Offset: query.Offset()}
-	rows := []models.SCIMResource{}
-	if err := q.Order(order, args...).All(&rows); err != nil {
+	items, err := r.decodeAll(rows)
+	if err != nil {
 		return nil, 0, err
 	}
+	return items, q.Paginator.TotalEntriesSize, nil
+}
+
+func (r *repository[T]) filter(ctx context.Context, expression string) (*pop.Query, error) {
+	scope, err := r.scope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := scope.Query(r.db.WithContext(ctx))
+	if expression == "" {
+		return q, nil
+	}
+	builder, err := protocol.Filter(r.schemas, expression, newEvaluator(r.schemas))
+	if err != nil {
+		return nil, err
+	}
+	return q.Scope(builder.Scope), nil
+}
+
+func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]models.SCIMResource, error) {
+	order, args, err := r.order(query)
+	if err != nil {
+		return nil, err
+	}
+	q.Paginator = &pop.Paginator{PerPage: query.Count, Offset: query.Offset()}
+	rows := []models.SCIMResource{}
+	return rows, q.Order(order, args...).All(&rows)
+}
+
+func (r *repository[T]) decodeAll(rows []models.SCIMResource) ([]T, error) {
 	items := make([]T, 0, len(rows))
 	for _, row := range rows {
 		item, err := r.decode(&row)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		items = append(items, item)
 	}
-	return items, q.Paginator.TotalEntriesSize, nil
+	return items, nil
 }
 
 func (r *repository[T]) Read(ctx context.Context, id string) (T, error) {
