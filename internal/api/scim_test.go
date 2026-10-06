@@ -429,6 +429,33 @@ func TestSCIMGroups(t *testing.T) {
 		require.Equal(t, []core.Member{{Value: child.ID, Ref: child.Meta.Location, Type: "Group"}}, c.group(t, parent.ID).Members)
 	})
 
+	t.Run("derives direct and indirect user groups", func(t *testing.T) {
+		user := createUser(t)
+		child := create(t, user)
+		parent := create(t)
+		require.Equal(t, http.StatusNoContent, patch(t, parent.ID, map[string]any{"op": "add", "path": "members", "value": []core.Member{{Value: child.ID}}}).StatusCode)
+		groups := []core.GroupMembership{
+			{Value: child.ID, Ref: child.Meta.Location, Display: child.DisplayName, Type: "direct"},
+			{Value: parent.ID, Ref: parent.Meta.Location, Display: parent.DisplayName, Type: "indirect"},
+		}
+
+		require.Equal(t, groups, c.user(t, user.ID).Groups)
+		for _, filter := range []string{
+			`groups.value eq "` + parent.ID + `"`,
+			`groups[value eq "` + parent.ID + `" and type eq "indirect"]`,
+			`groups[value eq "` + child.ID + `" and type eq "direct"]`,
+		} {
+			list := scimList[core.User](t, c, scimUsersPath, url.Values{"filter": {filter}})
+			require.Len(t, list.Resources, 1, filter)
+			require.Equal(t, user.ID, list.Resources[0].ID)
+			require.Equal(t, groups, list.Resources[0].Groups)
+		}
+		require.Zero(t, scimList[core.User](t, c, scimUsersPath, url.Values{"filter": {`groups[value eq "` + parent.ID + `" and type eq "direct"]`}}).TotalResults)
+
+		require.Equal(t, http.StatusNoContent, c.do(t, http.MethodDelete, scimGroupsPath+"/"+child.ID, nil).StatusCode)
+		require.Empty(t, c.user(t, user.ID).Groups)
+	})
+
 	t.Run("rejects cyclic members", func(t *testing.T) {
 		bottom := create(t)
 		middle := create(t)
@@ -505,6 +532,7 @@ func TestSCIMIsolation(t *testing.T) {
 	require.Zero(t, scimList[core.User](t, other, scimUsersPath, url.Values{"filter": {`userName eq "` + user.UserName + `"`}}).TotalResults)
 	require.Zero(t, scimList[core.Group](t, other, scimGroupsPath, url.Values{"filter": {`displayName eq "` + group.DisplayName + `"`}}).TotalResults)
 	require.Equal(t, user.UserName, other.createUser(t, user.UserName).UserName)
+	user.Groups = []core.GroupMembership{{Value: group.ID, Ref: group.Meta.Location, Display: group.DisplayName, Type: "direct"}}
 	require.Equal(t, user, c.user(t, user.ID))
 }
 

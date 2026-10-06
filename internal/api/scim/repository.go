@@ -244,20 +244,15 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 		if ref.excluded(excluded) {
 			continue
 		}
-		references, err := scope.FindReferences(tx, ids, ref.attribute)
+		loaded, err := ref.load(tx, scope, ids, r.locations)
 		if err != nil {
 			return nil, err
 		}
-		for _, reference := range references {
-			if elements[reference.SourceID] == nil {
-				elements[reference.SourceID] = map[string]any{}
+		for id, list := range loaded {
+			if elements[id] == nil {
+				elements[id] = map[string]any{}
 			}
-			list, _ := elements[reference.SourceID][ref.attribute].([]any)
-			elements[reference.SourceID][ref.attribute] = append(list, map[string]any{
-				"value": reference.TargetID.String(),
-				"$ref":  r.locations[reference.TargetType] + "/" + reference.TargetID.String(),
-				"type":  reference.TargetType,
-			})
+			elements[id][ref.attribute] = list
 		}
 	}
 	items := make([]T, 0, len(rows))
@@ -326,12 +321,12 @@ func (r *repository[T]) page(q *pop.Query, query *protocol.SearchRequest) ([]mod
 	return rows, q.Order(order, args...).All(&rows)
 }
 
-func (r *repository[T]) attributes() []string {
-	names := make([]string, len(r.references))
+func (r *repository[T]) attributes() []query.Reference {
+	references := make([]query.Reference, len(r.references))
 	for i, ref := range r.references {
-		names[i] = ref.attribute
+		references[i] = ref.query()
 	}
-	return names
+	return references
 }
 
 func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {

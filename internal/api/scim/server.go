@@ -35,7 +35,7 @@ func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) http.Ha
 				WithRepository(NewRepository[*core.User](db, "User", locations, core.Schemas{
 					core.NewSchema(core.SchemaUser).With(core.UserAttributes()...),
 					core.NewSchema(core.SchemaEnterpriseUser).With(core.EnterpriseUserAttributes()...),
-				})),
+				}, Derived("groups", "Group", "members"))),
 			),
 			server.WithResource(server.
 				NewResource[*core.Group]("Group", "/Groups", core.SchemaGroup, core.GroupAttributes()...).

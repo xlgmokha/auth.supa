@@ -8,6 +8,7 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
+	"github.com/supabase/auth/internal/api/scim/query"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/storage"
 )
@@ -15,24 +16,40 @@ import (
 type Reference struct {
 	attribute string
 	targets   []string
+	source    string
+	via       string
 }
 
 func Stored(attribute string) Reference {
 	return Reference{attribute: attribute}
 }
 
+func Derived(attribute, source, via string) Reference {
+	return Reference{attribute: attribute, source: source, via: via}
+}
+
 func (ref Reference) resolve(schemas core.Schemas) Reference {
 	attribute := schemas.Base().Attributes.Lookup(ref.attribute)
 	ref.attribute = attribute.Name
+	if ref.derived() {
+		return ref
+	}
 	for _, target := range attribute.SubAttribute("$ref").ReferenceTypes {
 		ref.targets = append(ref.targets, string(target))
 	}
 	return ref
 }
 
+func (ref Reference) derived() bool {
+	return ref.via != ""
+}
+
 func (ref Reference) extract(document map[string]any) ([]uuid.UUID, error) {
 	elements, _ := document[ref.attribute].([]any)
 	delete(document, ref.attribute)
+	if ref.derived() {
+		return nil, nil
+	}
 	ids := make([]uuid.UUID, 0, len(elements))
 	seen := make(map[uuid.UUID]bool, len(elements))
 	for _, element := range elements {
@@ -50,6 +67,9 @@ func (ref Reference) extract(document map[string]any) ([]uuid.UUID, error) {
 }
 
 func (ref Reference) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error {
+	if ref.derived() {
+		return nil
+	}
 	current, err := scope.FindReferences(tx, []uuid.UUID{source}, ref.attribute)
 	if err != nil {
 		return err
@@ -111,6 +131,41 @@ func (ref Reference) acyclic(tx *storage.Connection, scope models.SCIMScope, sou
 		}
 	}
 	return nil
+}
+
+func (ref Reference) load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
+	elements := map[uuid.UUID][]any{}
+	if ref.derived() {
+		ancestors, err := scope.FindAncestors(tx, ids, ref.via)
+		for _, ancestor := range ancestors {
+			element := map[string]any{
+				"value": ancestor.SourceID.String(),
+				"$ref":  locations[ref.source] + "/" + ancestor.SourceID.String(),
+				"type":  "indirect",
+			}
+			if ancestor.Depth == 1 {
+				element["type"] = "direct"
+			}
+			if ancestor.Display != nil {
+				element["display"] = *ancestor.Display
+			}
+			elements[ancestor.TargetID] = append(elements[ancestor.TargetID], element)
+		}
+		return elements, err
+	}
+	references, err := scope.FindReferences(tx, ids, ref.attribute)
+	for _, reference := range references {
+		elements[reference.SourceID] = append(elements[reference.SourceID], map[string]any{
+			"value": reference.TargetID.String(),
+			"$ref":  locations[reference.TargetType] + "/" + reference.TargetID.String(),
+			"type":  reference.TargetType,
+		})
+	}
+	return elements, err
+}
+
+func (ref Reference) query() query.Reference {
+	return query.Reference{Attribute: ref.attribute, Via: ref.via}
 }
 
 func (ref Reference) excluded(attributes []string) bool {
