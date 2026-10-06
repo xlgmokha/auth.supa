@@ -47,7 +47,7 @@ func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) http.Ha
 					core.NewSchema(core.SchemaGroup).With(core.GroupAttributes()...),
 				}, Stored("members"))),
 			),
-			server.WithAuthentication(core.NewOAuthBearerToken().AsPrimary(), newAuthenticate(db)),
+			server.WithAuthentication(core.NewOAuthBearerToken().AsPrimary(), authenticate(db)),
 		),
 	}
 }
@@ -56,7 +56,7 @@ func SendTooManyRequests(w http.ResponseWriter) error {
 	return protocol.SendError(w, scimerrors.NewError(http.StatusTooManyRequests, "", "Request rate limit reached"))
 }
 
-func newAuthenticate(db *storage.Connection) func(http.Handler) http.Handler {
+func authenticate(db *storage.Connection) func(http.Handler) http.Handler {
 	return server.RequireBearerToken(func(ctx context.Context, candidate string) (context.Context, error) {
 		token, err := models.AuthenticateSCIMToken(db.WithContext(ctx), candidate)
 		if models.IsNotFoundError(err) {
