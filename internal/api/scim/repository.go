@@ -48,11 +48,11 @@ func NewRepository[T core.Resource](db *storage.Connection, resourceType, endpoi
 }
 
 func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest) ([]T, int, error) {
-	providerID, err := r.providerID(ctx)
+	scope, err := r.scope(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	q := models.SCIMResources(r.db.WithContext(ctx), providerID, r.resourceType)
+	q := scope.Query(r.db.WithContext(ctx))
 	if query.Filter != "" {
 		builder, err := protocol.Filter(r.schemas, query.Filter, newEvaluator(r.schemas))
 		if err != nil {
@@ -90,11 +90,11 @@ func (r *repository[T]) Read(ctx context.Context, id string) (T, error) {
 	if err != nil {
 		return zero, notFound()
 	}
-	providerID, err := r.providerID(ctx)
+	scope, err := r.scope(ctx)
 	if err != nil {
 		return zero, err
 	}
-	row, err := models.FindSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, key)
+	row, err := scope.Find(r.db.WithContext(ctx), key)
 	if models.IsNotFoundError(err) {
 		return zero, notFound()
 	}
@@ -106,7 +106,7 @@ func (r *repository[T]) Read(ctx context.Context, id string) (T, error) {
 
 func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 	var zero T
-	providerID, err := r.providerID(ctx)
+	scope, err := r.scope(ctx)
 	if err != nil {
 		return zero, err
 	}
@@ -114,7 +114,7 @@ func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	row, err := models.CreateSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, document)
+	row, err := scope.Create(r.db.WithContext(ctx), document)
 	if err != nil {
 		return zero, uniqueness(err)
 	}
@@ -123,7 +123,7 @@ func (r *repository[T]) Create(ctx context.Context, item T) (T, error) {
 
 func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 	var zero T
-	providerID, err := r.providerID(ctx)
+	scope, err := r.scope(ctx)
 	if err != nil {
 		return zero, err
 	}
@@ -132,7 +132,7 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 		return zero, err
 	}
 	common := item.Common()
-	row, err := models.UpdateSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
+	row, err := scope.Update(r.db.WithContext(ctx), uuid.FromStringOrNil(common.ID), document, versionTime(common.Meta.Version))
 	if models.IsNotFoundError(err) {
 		return zero, r.missing(ctx, common.ID)
 	}
@@ -143,24 +143,24 @@ func (r *repository[T]) Update(ctx context.Context, item T) (T, error) {
 }
 
 func (r *repository[T]) Delete(ctx context.Context, item T) error {
-	providerID, err := r.providerID(ctx)
+	scope, err := r.scope(ctx)
 	if err != nil {
 		return err
 	}
 	common := item.Common()
-	err = models.DeleteSCIMResource(r.db.WithContext(ctx), providerID, r.resourceType, uuid.FromStringOrNil(common.ID), versionTime(common.Meta.Version))
+	err = scope.Delete(r.db.WithContext(ctx), uuid.FromStringOrNil(common.ID), versionTime(common.Meta.Version))
 	if models.IsNotFoundError(err) {
 		return r.missing(ctx, common.ID)
 	}
 	return err
 }
 
-func (r *repository[T]) providerID(ctx context.Context) (uuid.UUID, error) {
+func (r *repository[T]) scope(ctx context.Context) (models.SCIMScope, error) {
 	token := tokenKey.Value(ctx)
 	if token == nil {
-		return uuid.Nil, scimerrors.ErrInternal("missing SCIM token")
+		return models.SCIMScope{}, scimerrors.ErrInternal("missing SCIM token")
 	}
-	return token.SSOProviderID, nil
+	return models.SCIMScope{ProviderID: token.SSOProviderID, ResourceType: r.resourceType}, nil
 }
 
 func (r *repository[T]) missing(ctx context.Context, id string) error {

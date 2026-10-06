@@ -26,16 +26,21 @@ func (SCIMResource) TableName() string {
 	return "scim_resources"
 }
 
-func SCIMResources(tx *storage.Connection, providerID uuid.UUID, resourceType string) *pop.Query {
+type SCIMScope struct {
+	ProviderID   uuid.UUID
+	ResourceType string
+}
+
+func (s SCIMScope) Query(tx *storage.Connection) *pop.Query {
 	return tx.Q().
-		Where("sso_provider_id = ?", providerID).
-		Where("resource_type = ?", resourceType).
+		Where("sso_provider_id = ?", s.ProviderID).
+		Where("resource_type = ?", s.ResourceType).
 		Where("deleted_at IS NULL")
 }
 
-func FindSCIMResource(tx *storage.Connection, providerID uuid.UUID, resourceType string, id uuid.UUID) (*SCIMResource, error) {
+func (s SCIMScope) Find(tx *storage.Connection, id uuid.UUID) (*SCIMResource, error) {
 	resource := &SCIMResource{}
-	if err := SCIMResources(tx, providerID, resourceType).Where("id = ?", id).First(resource); err != nil {
+	if err := s.Query(tx).Where("id = ?", id).First(resource); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, SCIMNotFoundError{}
 		}
@@ -44,20 +49,20 @@ func FindSCIMResource(tx *storage.Connection, providerID uuid.UUID, resourceType
 	return resource, nil
 }
 
-func CreateSCIMResource(tx *storage.Connection, providerID uuid.UUID, resourceType, document string) (*SCIMResource, error) {
+func (s SCIMScope) Create(tx *storage.Connection, document string) (*SCIMResource, error) {
 	resource := &SCIMResource{}
 	err := tx.RawQuery(
 		fmt.Sprintf("INSERT INTO %q (id, sso_provider_id, resource_type, resource) VALUES (?, ?, ?, ?::jsonb) RETURNING *", resource.TableName()),
-		uuid.Must(uuid.NewV4()), providerID, resourceType, document,
+		uuid.Must(uuid.NewV4()), s.ProviderID, s.ResourceType, document,
 	).First(resource)
 	return resource, err
 }
 
-func UpdateSCIMResource(tx *storage.Connection, providerID uuid.UUID, resourceType string, id uuid.UUID, document string, version *time.Time) (*SCIMResource, error) {
+func (s SCIMScope) Update(tx *storage.Connection, id uuid.UUID, document string, version *time.Time) (*SCIMResource, error) {
 	resource := &SCIMResource{}
 	if err := tx.RawQuery(
 		fmt.Sprintf("UPDATE %q SET resource = ?::jsonb, updated_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at) RETURNING *", resource.TableName()),
-		document, id, providerID, resourceType, version,
+		document, id, s.ProviderID, s.ResourceType, version,
 	).First(resource); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, SCIMNotFoundError{}
@@ -67,10 +72,10 @@ func UpdateSCIMResource(tx *storage.Connection, providerID uuid.UUID, resourceTy
 	return resource, nil
 }
 
-func DeleteSCIMResource(tx *storage.Connection, providerID uuid.UUID, resourceType string, id uuid.UUID, version *time.Time) error {
+func (s SCIMScope) Delete(tx *storage.Connection, id uuid.UUID, version *time.Time) error {
 	count, err := tx.RawQuery(
 		fmt.Sprintf("UPDATE %q SET deleted_at = now() WHERE id = ? AND sso_provider_id = ? AND resource_type = ? AND deleted_at IS NULL AND updated_at = COALESCE(?, updated_at)", SCIMResource{}.TableName()),
-		id, providerID, resourceType, version,
+		id, s.ProviderID, s.ResourceType, version,
 	).ExecWithCount()
 	if err != nil {
 		return errors.Wrap(err, "error deleting SCIM resource")
