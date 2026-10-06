@@ -19,6 +19,5 @@ type auditEvent struct {
 
 func audit(config *conf.GlobalConfiguration, tx *storage.Connection, r *http.Request, event auditEvent) error {
 	event.Traits["sso_provider_id"] = event.ProviderID
-	event.Traits["outcome"] = "success"
 	return models.NewAuditLogEntry(config.AuditLog, r, tx, event.Actor, event.Action, utilities.GetIPAddress(r), event.Traits)
 }
