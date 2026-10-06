@@ -27,8 +27,7 @@ func (ts *SCIMSettingsTestSuite) SetupTest() {
 }
 
 func (ts *SCIMSettingsTestSuite) TestDeletedWithProvider() {
-	_, err := EnableSCIM(ts.db, ts.provider.ID)
-	require.NoError(ts.T(), err)
+	require.NoError(ts.T(), EnableSCIM(ts.db, ts.provider.ID))
 	require.NoError(ts.T(), ts.db.Destroy(ts.provider))
 
 	count, err := ts.db.Q().Where("sso_provider_id = ?", ts.provider.ID).Count(&SCIMSettings{})

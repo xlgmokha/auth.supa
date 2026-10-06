@@ -172,7 +172,7 @@ func TestSCIMAuthentication(t *testing.T) {
 	}
 
 	t.Run("rejects a revoked token", func(t *testing.T) {
-		token, raw, err := models.CreateSCIMToken(c.inst.Conn, c.provider, nil)
+		token, raw, err := models.CreateSCIMToken(c.inst.Conn, c.provider.ID, nil)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, c.as(raw).get(t, scimUsersPath).StatusCode)
 
@@ -270,7 +270,7 @@ func TestSCIMAdmin(t *testing.T) {
 
 	t.Run("DELETE token returns 404 for a token it cannot find", func(t *testing.T) {
 		other := newSCIMClient(t, nil)
-		foreign, _, err := models.CreateSCIMToken(other.inst.Conn, other.provider, nil)
+		foreign, _, err := models.CreateSCIMToken(other.inst.Conn, other.provider.ID, nil)
 		require.NoError(t, err)
 
 		for _, id := range []string{uuid.Must(uuid.NewV4()).String(), "not-a-uuid", foreign.ID.String()} {
@@ -1012,9 +1012,8 @@ func newSCIMClient(t *testing.T, tweak func(*conf.GlobalConfiguration)) scimClie
 	provider := &models.SSOProvider{}
 	require.NoError(t, inst.Conn.Create(provider))
 	t.Cleanup(func() { require.NoError(t, inst.Conn.Destroy(provider)) })
-	_, err := models.EnableSCIM(inst.Conn, provider.ID)
-	require.NoError(t, err)
-	_, token, err := models.CreateSCIMToken(inst.Conn, provider, nil)
+	require.NoError(t, models.EnableSCIM(inst.Conn, provider.ID))
+	_, token, err := models.CreateSCIMToken(inst.Conn, provider.ID, nil)
 	require.NoError(t, err)
 	return scimClient{inst, provider, token}
 }

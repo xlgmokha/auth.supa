@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/gofrs/uuid"
 	"github.com/supabase/auth/internal/api/apierrors"
 	"github.com/supabase/auth/internal/api/scim"
 	"github.com/supabase/auth/internal/models"
@@ -51,9 +52,11 @@ func (a *API) toggleSCIM(w http.ResponseWriter, r *http.Request, enabled bool) e
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
-	if err := db.Transaction(func(tx *storage.Connection) error {
-		return scim.SetEnabled(tx, provider.ID, enabled)
-	}); err != nil {
+	set := models.DisableSCIM
+	if enabled {
+		set = models.EnableSCIM
+	}
+	if err := set(db, provider.ID); err != nil {
 		return apierrors.NewInternalServerError("Error toggling SCIM").WithInternalError(err)
 	}
 
@@ -72,13 +75,7 @@ func (a *API) adminSCIMTokensCreate(w http.ResponseWriter, r *http.Request) erro
 		}
 	}
 
-	var token *models.SCIMToken
-	var plaintext string
-	err := db.Transaction(func(tx *storage.Connection) error {
-		var terr error
-		token, plaintext, terr = scim.CreateToken(tx, provider, params.ExpiresAt)
-		return terr
-	})
+	token, plaintext, err := models.CreateSCIMToken(db, provider.ID, params.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, models.ErrSCIMTokenExpiry) {
 			return apierrors.NewBadRequestError(apierrors.ErrorCodeValidationFailed, "expires_at must be in the future")
@@ -110,10 +107,11 @@ func (a *API) adminSCIMTokensRevoke(w http.ResponseWriter, r *http.Request) erro
 	db := a.db.WithContext(ctx)
 	provider := getSSOProvider(ctx)
 
+	id := uuid.FromStringOrNil(chi.URLParam(r, "token_id"))
 	var token *models.SCIMToken
 	err := db.Transaction(func(tx *storage.Connection) error {
 		var terr error
-		token, terr = scim.RevokeToken(tx, provider.ID, chi.URLParam(r, "token_id"))
+		token, terr = models.RevokeSCIMToken(tx, provider.ID, id)
 		return terr
 	})
 	if err != nil {

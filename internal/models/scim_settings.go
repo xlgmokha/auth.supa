@@ -17,20 +17,18 @@ func (SCIMSettings) TableName() string {
 	return "scim_settings"
 }
 
-func EnableSCIM(tx *storage.Connection, providerID uuid.UUID) (bool, error) {
-	count, err := tx.RawQuery(
+func EnableSCIM(tx *storage.Connection, providerID uuid.UUID) error {
+	return errors.Wrap(tx.RawQuery(
 		fmt.Sprintf("INSERT INTO %[1]q (sso_provider_id, enabled) VALUES (?, true) ON CONFLICT (sso_provider_id) DO UPDATE SET enabled = true, updated_at = now() WHERE %[1]q.enabled = false", SCIMSettings{}.TableName()),
 		providerID,
-	).ExecWithCount()
-	return count > 0, errors.Wrap(err, "error enabling SCIM")
+	).Exec(), "error enabling SCIM")
 }
 
-func DisableSCIM(tx *storage.Connection, providerID uuid.UUID) (bool, error) {
-	count, err := tx.RawQuery(
+func DisableSCIM(tx *storage.Connection, providerID uuid.UUID) error {
+	return errors.Wrap(tx.RawQuery(
 		fmt.Sprintf("UPDATE %q SET enabled = false, updated_at = now() WHERE sso_provider_id = ? AND enabled", SCIMSettings{}.TableName()),
 		providerID,
-	).ExecWithCount()
-	return count > 0, errors.Wrap(err, "error disabling SCIM")
+	).Exec(), "error disabling SCIM")
 }
 
 func IsSCIMEnabled(tx *storage.Connection, providerID uuid.UUID) (bool, error) {

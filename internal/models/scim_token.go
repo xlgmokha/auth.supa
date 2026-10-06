@@ -66,7 +66,7 @@ func (t *SCIMToken) Revoke(tx *storage.Connection) error {
 	return nil
 }
 
-func CreateSCIMToken(tx *storage.Connection, provider *SSOProvider, expiresAt *time.Time) (*SCIMToken, string, error) {
+func CreateSCIMToken(tx *storage.Connection, providerID uuid.UUID, expiresAt *time.Time) (*SCIMToken, string, error) {
 	plaintext, err := generateSCIMToken()
 	if err != nil {
 		return nil, "", errors.Wrap(err, "error generating SCIM token")
@@ -74,7 +74,7 @@ func CreateSCIMToken(tx *storage.Connection, provider *SSOProvider, expiresAt *t
 
 	token := &SCIMToken{
 		ID:            uuid.Must(uuid.NewV4()),
-		SSOProviderID: provider.ID,
+		SSOProviderID: providerID,
 		TokenHash:     hashSCIMToken(plaintext),
 		Prefix:        plaintext[:scimTokenPrefixLength],
 		ExpiresAt:     expiresAt,
@@ -114,6 +114,20 @@ func FindSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMToken
 			return nil, SCIMNotFoundError{}
 		}
 		return nil, errors.Wrap(err, "error finding SCIM token")
+	}
+	return token, nil
+}
+
+func RevokeSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMToken, error) {
+	token, err := FindSCIMToken(tx, providerID, id)
+	if err != nil || token.IsRevoked() {
+		return token, err
+	}
+	if err := token.Revoke(tx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return FindSCIMToken(tx, providerID, id)
+		}
+		return nil, err
 	}
 	return token, nil
 }

@@ -21,7 +21,6 @@ func setupSCIMTestDB(t *testing.T) *storage.Connection {
 func createSCIMTestProvider(t require.TestingT, db *storage.Connection) *SSOProvider {
 	provider := &SSOProvider{}
 	require.NoError(t, db.Create(provider))
-	_, err := EnableSCIM(db, provider.ID)
-	require.NoError(t, err)
+	require.NoError(t, EnableSCIM(db, provider.ID))
 	return provider
 }

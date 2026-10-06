@@ -70,7 +70,7 @@ func (ts *SCIMTokenTestSuite) TestFindBySSOProvider() {
 	require.NoError(ts.T(), revoked.Revoke(ts.db))
 	expired, _ := ts.createToken(nil)
 	ts.expire(expired)
-	_, _, err := CreateSCIMToken(ts.db, ts.createProvider(), nil)
+	_, _, err := CreateSCIMToken(ts.db, ts.createProvider().ID, nil)
 	require.NoError(ts.T(), err)
 
 	tokens, err := FindSCIMTokensBySSOProvider(ts.db, ts.provider.ID)
@@ -133,16 +133,15 @@ func (ts *SCIMTokenTestSuite) TestAuthenticateRejects() {
 		{"scim never enabled", func() string {
 			provider := &SSOProvider{}
 			require.NoError(ts.T(), ts.db.Create(provider))
-			_, plaintext, err := CreateSCIMToken(ts.db, provider, nil)
+			_, plaintext, err := CreateSCIMToken(ts.db, provider.ID, nil)
 			require.NoError(ts.T(), err)
 			return plaintext
 		}},
 		{"scim disabled", func() string {
 			provider := ts.createProvider()
-			_, plaintext, err := CreateSCIMToken(ts.db, provider, nil)
+			_, plaintext, err := CreateSCIMToken(ts.db, provider.ID, nil)
 			require.NoError(ts.T(), err)
-			_, err = DisableSCIM(ts.db, provider.ID)
-			require.NoError(ts.T(), err)
+			require.NoError(ts.T(), DisableSCIM(ts.db, provider.ID))
 			return plaintext
 		}},
 	} {
@@ -158,7 +157,7 @@ func (ts *SCIMTokenTestSuite) createProvider() *SSOProvider {
 }
 
 func (ts *SCIMTokenTestSuite) createToken(expiresAt *time.Time) (*SCIMToken, string) {
-	token, plaintext, err := CreateSCIMToken(ts.db, ts.provider, expiresAt)
+	token, plaintext, err := CreateSCIMToken(ts.db, ts.provider.ID, expiresAt)
 	require.NoError(ts.T(), err)
 	return token, plaintext
 }
