@@ -477,7 +477,7 @@ func NewAPIWithVersion(globalConfig *conf.GlobalConfiguration, db *storage.Conne
 
 		r.Route(scim.BasePath, func(r *router) {
 			r.Use(api.requireScimServerEnabled)
-			r.UseBypass(api.limitSCIMByIP(api.limiterOpts.SCIMIP))
+			r.UseBypass(api.limitSCIMByIP(api.limiterOpts.SCIM))
 			r.chi.Handle("/*", api.scim)
 		})
 	})

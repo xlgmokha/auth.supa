@@ -67,7 +67,7 @@ const (
 	// GOTRUE_RATE_LIMIT_SCIM
 	//   -> RateLimitScim
 	envRateLimitScim = "GOTRUE_RATE_LIMIT_SCIM"
-	fieldSCIMIP      = "SCIMIP"
+	fieldSCIM        = "SCIMIP"
 
 	// GOTRUE_RATE_LIMIT_TOKEN_REFRESH
 	//   -> RateLimitTokenRefresh
@@ -104,7 +104,7 @@ var tollboothFieldsToEnv = map[string]string{
 	fieldPasskeyAuthentication: envRateLimitPasskey,
 	fieldSAMLAssertion:         envSAMLRateLimitAssertion,
 	fieldSSO:                   envRateLimitSso,
-	fieldSCIMIP:                envRateLimitScim,
+	fieldSCIM:                  envRateLimitScim,
 	fieldToken:                 envRateLimitTokenRefresh,
 	fieldVerify:                envRateLimitVerify,
 	fieldWeb3:                  envRateLimitWeb3,
@@ -176,7 +176,7 @@ type Limiter struct {
 
 	// GOTRUE_RATE_LIMIT_SCIM
 	//   -> RateLimitScim
-	SCIMIP *limiter.Limiter
+	SCIM *limiter.Limiter
 
 	// GOTRUE_RATE_LIMIT_TOKEN_REFRESH
 	//   -> RateLimitTokenRefresh
@@ -248,7 +248,7 @@ func New(gc *conf.GlobalConfiguration) *Limiter {
 	o.Signups = newLimiterPer5mOver1h(gc.RateLimitOtp)
 	o.OAuthClientRegister = newLimiterPer5mOver1h(gc.RateLimitOAuthDynamicClientRegister)
 	o.PasskeyAuthentication = newLimiterPer5mOver1h(gc.RateLimitPasskey)
-	o.SCIMIP = newLimiterPer5mOver1h(gc.RateLimitScim)
+	o.SCIM = newLimiterPer5mOver1h(gc.RateLimitScim)
 	return o
 }
 
@@ -269,7 +269,7 @@ func (o *Limiter) Copy() *Limiter {
 		Recover:               o.Recover,
 		Resend:                o.Resend,
 		SAMLAssertion:         o.SAMLAssertion,
-		SCIMIP:                o.SCIMIP,
+		SCIM:                  o.SCIM,
 		Signups:               o.Signups,
 		SSO:                   o.SSO,
 		Token:                 o.Token,
@@ -345,7 +345,7 @@ func (o *Limiter) Update(
 	}
 
 	if a, b := prevCfg.RateLimitScim, nextCfg.RateLimitScim; a != b {
-		v.SCIMIP = newLimiterPer5mOver1h(b)
+		v.SCIM = newLimiterPer5mOver1h(b)
 		logEnvUpdates(le, envRateLimitScim, a, b)
 	}
 
