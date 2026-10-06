@@ -134,21 +134,6 @@ func (s SCIMScope) FindAncestors(tx *storage.Connection, targets []uuid.UUID, at
 	return ancestors, errors.Wrap(err, "error finding SCIM ancestors")
 }
 
-func (s SCIMScope) FindAncestorIDs(tx *storage.Connection, id uuid.UUID, attribute string) ([]uuid.UUID, error) {
-	ids := []uuid.UUID{}
-	table := SCIMReference{}.TableName()
-	err := tx.RawQuery(
-		fmt.Sprintf(`WITH RECURSIVE chain (source_id) AS (
-			SELECT source_id FROM %q WHERE target_id = ? AND attribute = ?
-			UNION
-			SELECT r.source_id FROM chain c JOIN %q r ON r.target_id = c.source_id AND r.attribute = ?
-		)
-		SELECT source_id FROM chain`, table, table),
-		id, attribute, attribute,
-	).All(&ids)
-	return ids, errors.Wrap(err, "error finding SCIM ancestors")
-}
-
 func (s SCIMScope) DeleteReferences(tx *storage.Connection, id uuid.UUID) error {
 	table := SCIMReference{}.TableName()
 	for _, column := range []string{"source_id", "target_id"} {

@@ -91,13 +91,12 @@ func (ref stored) acyclic(tx *storage.Connection, scope models.SCIMScope, source
 	if len(targets) == 0 {
 		return nil
 	}
-	ancestors, err := scope.FindAncestorIDs(tx, source, ref.name())
+	ancestors, err := scope.FindAncestors(tx, []uuid.UUID{source}, ref.name())
 	if err != nil {
 		return err
 	}
-	ancestors = append(ancestors, source)
 	for _, target := range targets {
-		if slices.Contains(ancestors, target) {
+		if target == source || slices.ContainsFunc(ancestors, func(ancestor models.SCIMAncestor) bool { return ancestor.SourceID == target }) {
 			return scimerrors.ErrInvalidValue(strconv.Quote(target.String()) + " would make " + ref.name() + " cyclic")
 		}
 	}
