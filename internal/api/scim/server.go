@@ -1,17 +1,21 @@
 package scim
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase-community/scim-go/pkg/protocol"
+	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase-community/scim-go/pkg/server"
 	"github.com/supabase/auth/internal/conf"
+	"github.com/supabase/auth/internal/ctxkey"
+	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/observability"
 	"github.com/supabase/auth/internal/storage"
 )
 
-const BasePath = "/scim/v2"
+var tokenKey = ctxkey.New[*models.SCIMToken]("scim_token")
 
 type Server struct {
 	*server.Server
@@ -46,4 +50,21 @@ func NewServer(config *conf.GlobalConfiguration, db *storage.Connection) http.Ha
 			server.WithAuthentication(core.NewOAuthBearerToken().AsPrimary(), newAuthenticate(db)),
 		),
 	}
+}
+
+func SendTooManyRequests(w http.ResponseWriter) error {
+	return protocol.SendError(w, scimerrors.NewError(http.StatusTooManyRequests, "", "Request rate limit reached"))
+}
+
+func newAuthenticate(db *storage.Connection) func(http.Handler) http.Handler {
+	return server.RequireBearerToken(func(ctx context.Context, candidate string) (context.Context, error) {
+		token, err := models.AuthenticateSCIMToken(db.WithContext(ctx), candidate)
+		if models.IsNotFoundError(err) {
+			return ctx, server.ErrInvalidToken
+		}
+		if err != nil {
+			return ctx, err
+		}
+		return tokenKey.WithValue(ctx, token), nil
+	})
 }
