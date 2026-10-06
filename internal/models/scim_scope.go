@@ -80,19 +80,16 @@ func (s SCIMScope) Delete(tx *storage.Connection, id uuid.UUID, version *time.Ti
 	return nil
 }
 
-func (s SCIMScope) AddReferences(tx *storage.Connection, source uuid.UUID, attribute string, targets []uuid.UUID) error {
+func (s SCIMScope) AddReferences(tx *storage.Connection, source uuid.UUID, attribute string, types []string, targets []uuid.UUID) ([]uuid.UUID, error) {
+	added := []uuid.UUID{}
 	if len(targets) == 0 {
-		return nil
+		return added, nil
 	}
 	err := tx.RawQuery(
-		fmt.Sprintf("INSERT INTO %q (sso_provider_id, source_id, attribute, target_id) SELECT ?, ?, ?, unnest(?::uuid[]) ON CONFLICT DO NOTHING", SCIMReference{}.TableName()),
-		s.ProviderID, source, attribute, uuidStrings(targets),
-	).Exec()
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && (pgErr.Code == pgerrcode.ForeignKeyViolation || pgErr.Code == pgerrcode.CheckViolation) {
-		return SCIMReferenceError{Attribute: attribute}
-	}
-	return errors.Wrap(err, "error adding SCIM references")
+		fmt.Sprintf("INSERT INTO %q (sso_provider_id, source_id, attribute, target_id) SELECT sso_provider_id, ?, ?, id FROM %q WHERE sso_provider_id = ? AND resource_type = any(?::text[]) AND deleted_at IS NULL AND id = any(?::uuid[]) RETURNING target_id", SCIMReference{}.TableName(), SCIMResource{}.TableName()),
+		source, attribute, s.ProviderID, types, uuidStrings(targets),
+	).All(&added)
+	return added, errors.Wrap(err, "error adding SCIM references")
 }
 
 func (s SCIMScope) RemoveReferences(tx *storage.Connection, source uuid.UUID, attribute string, targets []uuid.UUID) error {
@@ -111,31 +108,10 @@ func (s SCIMScope) FindReferences(tx *storage.Connection, sources []uuid.UUID, a
 		return references, nil
 	}
 	err := tx.RawQuery(
-		fmt.Sprintf("SELECT r.source_id, r.target_id, t.resource_type AS target_type FROM %q r JOIN %q t ON t.id = r.target_id WHERE r.source_id = any(?::uuid[]) AND r.attribute = ? ORDER BY r.source_id, r.target_id", SCIMReference{}.TableName(), SCIMResource{}.TableName()),
+		fmt.Sprintf("SELECT r.source_id, r.target_id, t.resource_type AS target_type FROM %q r JOIN %q t ON t.id = r.target_id AND t.deleted_at IS NULL WHERE r.source_id = any(?::uuid[]) AND r.attribute = ? ORDER BY r.source_id, r.target_id", SCIMReference{}.TableName(), SCIMResource{}.TableName()),
 		uuidStrings(sources), attribute,
 	).All(&references)
 	return references, errors.Wrap(err, "error finding SCIM references")
-}
-
-func (s SCIMScope) LockTargets(tx *storage.Connection, ids []uuid.UUID) (map[uuid.UUID]string, error) {
-	types := map[uuid.UUID]string{}
-	if len(ids) == 0 {
-		return types, nil
-	}
-	rows := []struct {
-		ID           uuid.UUID `db:"id"`
-		ResourceType string    `db:"resource_type"`
-	}{}
-	if err := tx.RawQuery(
-		fmt.Sprintf("SELECT id, resource_type FROM %q WHERE sso_provider_id = ? AND id = any(?::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE", SCIMResource{}.TableName()),
-		s.ProviderID, uuidStrings(ids),
-	).All(&rows); err != nil {
-		return nil, errors.Wrap(err, "error locking SCIM references")
-	}
-	for _, row := range rows {
-		types[row.ID] = row.ResourceType
-	}
-	return types, nil
 }
 
 func (s SCIMScope) FindAncestors(tx *storage.Connection, targets []uuid.UUID, attribute string) ([]SCIMAncestor, error) {
@@ -156,10 +132,6 @@ func (s SCIMScope) FindAncestors(tx *storage.Connection, targets []uuid.UUID, at
 		uuidStrings(targets), attribute, attribute,
 	).All(&ancestors)
 	return ancestors, errors.Wrap(err, "error finding SCIM ancestors")
-}
-
-func (s SCIMScope) LockHierarchy(tx *storage.Connection) error {
-	return errors.Wrap(tx.RawQuery("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "scim:hierarchy:"+s.ProviderID.String()).Exec(), "error locking SCIM hierarchy")
 }
 
 func (s SCIMScope) FindAncestorIDs(tx *storage.Connection, id uuid.UUID, attribute string) ([]uuid.UUID, error) {

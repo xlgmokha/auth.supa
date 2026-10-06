@@ -23,11 +23,3 @@ func (e SCIMUniquenessError) Is(target error) bool {
 }
 
 var ErrSCIMTokenExpiry = errors.New("SCIM token must expire after it is created")
-
-type SCIMReferenceError struct {
-	Attribute string
-}
-
-func (e SCIMReferenceError) Error() string {
-	return "SCIM resource " + e.Attribute + " references an unknown resource"
-}
