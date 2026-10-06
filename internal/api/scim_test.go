@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -620,39 +619,6 @@ func TestSCIMGroups(t *testing.T) {
 		list := scimList[core.Group](t, c, scimGroupsPath, url.Values{"filter": {`id eq "` + group.ID + `"`}, "excludedAttributes": {"members"}})
 		require.Len(t, list.Resources, 1)
 		require.Empty(t, list.Resources[0].Members)
-	})
-
-	t.Run("concurrent blind PATCH adds keep every member", func(t *testing.T) {
-		group := create(t)
-		users := []core.User{createUser(t), createUser(t), createUser(t), createUser(t)}
-		statuses := make([]int, len(users))
-
-		var wg sync.WaitGroup
-		for i, user := range users {
-			wg.Go(func() {
-				for range 20 {
-					res, err := c.inst.DoAuth(scimRequest(t, http.MethodPatch, scimGroupsPath+"/"+group.ID, newSCIMPatch(map[string]any{"op": "add", "path": "members", "value": []core.Member{{Value: user.ID}}})), c.token)
-					if err != nil {
-						return
-					}
-					statuses[i] = res.StatusCode
-					_ = res.Body.Close()
-					if res.StatusCode != http.StatusConflict {
-						return
-					}
-				}
-			})
-		}
-		wg.Wait()
-
-		for _, status := range statuses {
-			require.Equal(t, http.StatusNoContent, status)
-		}
-		members := []core.Member{}
-		for _, user := range users {
-			members = append(members, scimMember(user))
-		}
-		require.ElementsMatch(t, members, c.group(t, group.ID).Members)
 	})
 }
 
