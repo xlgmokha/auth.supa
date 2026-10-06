@@ -14,6 +14,7 @@ import (
 	"github.com/supabase-community/scim-go/pkg/scimerrors"
 	"github.com/supabase-community/scim-go/pkg/server"
 	"github.com/supabase/auth/internal/api/scim/query"
+	"github.com/supabase/auth/internal/api/scim/ref"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/storage"
 )
@@ -23,12 +24,12 @@ type repository[T core.Resource] struct {
 	resourceType string
 	locations    map[string]string
 	schemas      core.Schemas
-	references   []Reference
+	references   []ref.Reference
 }
 
-func NewRepository[T core.Resource](db *storage.Connection, resourceType string, locations map[string]string, schemas core.Schemas, references ...Reference) server.Repository[T] {
+func NewRepository[T core.Resource](db *storage.Connection, resourceType string, locations map[string]string, schemas core.Schemas, references ...ref.Reference) server.Repository[T] {
 	for i, ref := range references {
-		references[i] = ref.resolve(schemas)
+		references[i] = ref.Resolve(schemas)
 	}
 	return &repository[T]{
 		db:           db,
@@ -212,7 +213,7 @@ func (r *repository[T]) save(ctx context.Context, scope models.SCIMScope, target
 
 func (r *repository[T]) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets map[string][]uuid.UUID) error {
 	for _, ref := range r.references {
-		if err := ref.link(tx, scope, source, targets[ref.Name()]); err != nil {
+		if err := ref.Link(tx, scope, source, targets[ref.Name()]); err != nil {
 			return err
 		}
 	}
@@ -276,7 +277,7 @@ func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope
 		if !projection.Returns(ref.Name()) {
 			continue
 		}
-		loaded, err := ref.load(tx, scope, ids, r.locations)
+		loaded, err := ref.Load(tx, scope, ids, r.locations)
 		if err != nil {
 			return nil, err
 		}
@@ -325,7 +326,7 @@ func (r *repository[T]) encode(item T) (string, map[string][]uuid.UUID, error) {
 	}
 	targets := map[string][]uuid.UUID{}
 	for _, ref := range r.references {
-		if targets[ref.Name()], err = ref.extract(document.Get(ref.Name())); err != nil {
+		if targets[ref.Name()], err = ref.Extract(document.Get(ref.Name())); err != nil {
 			return "", nil, err
 		}
 		document.Remove(ref.Name())

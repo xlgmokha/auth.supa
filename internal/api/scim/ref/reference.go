@@ -1,4 +1,4 @@
-package scim
+package ref
 
 import (
 	"github.com/gofrs/uuid"
@@ -10,10 +10,10 @@ import (
 
 type Reference interface {
 	query.Reference
-	resolve(schemas core.Schemas) Reference
-	extract(attribute any) ([]uuid.UUID, error)
-	link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error
-	load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error)
+	Resolve(schemas core.Schemas) Reference
+	Extract(attribute any) ([]uuid.UUID, error)
+	Link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error
+	Load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error)
 }
 
 type named string

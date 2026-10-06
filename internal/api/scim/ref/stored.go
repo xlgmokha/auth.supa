@@ -1,4 +1,4 @@
-package scim
+package ref
 
 import (
 	"slices"
@@ -32,7 +32,7 @@ func (ref stored) Exists(inner string, args []any) (string, []any) {
 	return "EXISTS (SELECT 1 FROM scim_resource_references ref JOIN scim_resources target ON target.id = ref.target_id AND target.deleted_at IS NULL WHERE ref.source_id = scim_resources.id AND ref.attribute = ? AND " + inner + ")", append([]any{ref.Name()}, args...)
 }
 
-func (ref stored) resolve(schemas core.Schemas) Reference {
+func (ref stored) Resolve(schemas core.Schemas) Reference {
 	var attribute *core.Attribute
 	ref.named, attribute = ref.canonical(schemas)
 	for _, target := range attribute.SubAttribute("$ref").ReferenceTypes {
@@ -41,7 +41,7 @@ func (ref stored) resolve(schemas core.Schemas) Reference {
 	return ref
 }
 
-func (ref stored) extract(attribute any) ([]uuid.UUID, error) {
+func (ref stored) Extract(attribute any) ([]uuid.UUID, error) {
 	elements, _ := attribute.([]any)
 	ids := make([]uuid.UUID, 0, len(elements))
 	for _, element := range elements {
@@ -55,7 +55,7 @@ func (ref stored) extract(attribute any) ([]uuid.UUID, error) {
 	return ids, nil
 }
 
-func (ref stored) link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error {
+func (ref stored) Link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error {
 	current, err := scope.FindReferences(tx, []uuid.UUID{source}, ref.Name())
 	if err != nil {
 		return err
@@ -90,7 +90,7 @@ func (ref stored) acyclic(tx *storage.Connection, scope models.SCIMScope, source
 	return nil
 }
 
-func (ref stored) load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
+func (ref stored) Load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
 	elements := map[uuid.UUID][]any{}
 	references, err := scope.FindReferences(tx, ids, ref.Name())
 	for _, reference := range references {

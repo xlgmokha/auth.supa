@@ -1,4 +1,4 @@
-package scim
+package ref
 
 import (
 	"github.com/gofrs/uuid"
@@ -30,20 +30,20 @@ func (ref derived) Exists(inner string, args []any) (string, []any) {
 	) SELECT id FROM down)`, append(append([]any{ref.via}, args...), ref.via)
 }
 
-func (ref derived) resolve(schemas core.Schemas) Reference {
+func (ref derived) Resolve(schemas core.Schemas) Reference {
 	ref.named, _ = ref.canonical(schemas)
 	return ref
 }
 
-func (ref derived) extract(any) ([]uuid.UUID, error) {
+func (ref derived) Extract(any) ([]uuid.UUID, error) {
 	return nil, nil
 }
 
-func (ref derived) link(*storage.Connection, models.SCIMScope, uuid.UUID, []uuid.UUID) error {
+func (ref derived) Link(*storage.Connection, models.SCIMScope, uuid.UUID, []uuid.UUID) error {
 	return nil
 }
 
-func (ref derived) load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
+func (ref derived) Load(tx *storage.Connection, scope models.SCIMScope, ids []uuid.UUID, locations map[string]string) (map[uuid.UUID][]any, error) {
 	elements := map[uuid.UUID][]any{}
 	ancestors, err := scope.FindAncestors(tx, ids, ref.via)
 	for _, ancestor := range ancestors {
