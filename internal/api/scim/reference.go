@@ -1,9 +1,6 @@
 package scim
 
 import (
-	"slices"
-	"strings"
-
 	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
 	"github.com/supabase/auth/internal/api/scim/query"
@@ -13,7 +10,6 @@ import (
 
 type Reference interface {
 	name() string
-	excluded(attributes []string) bool
 	resolve(schemas core.Schemas) Reference
 	extract(document core.Object) ([]uuid.UUID, error)
 	link(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, wanted []uuid.UUID) error
@@ -25,12 +21,6 @@ type named string
 
 func (n named) name() string {
 	return string(n)
-}
-
-func (n named) excluded(attributes []string) bool {
-	return slices.ContainsFunc(attributes, func(attribute string) bool {
-		return strings.EqualFold(attribute, string(n))
-	})
 }
 
 func (n named) canonical(schemas core.Schemas) (named, *core.Attribute) {

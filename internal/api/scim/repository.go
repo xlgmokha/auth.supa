@@ -55,7 +55,7 @@ func (r *repository[T]) List(ctx context.Context, query *protocol.SearchRequest)
 	if err != nil {
 		return nil, 0, err
 	}
-	items, err := r.decodeAll(r.db.WithContext(ctx), scope, rows, query.ExcludedAttributes)
+	items, err := r.decodeAll(r.db.WithContext(ctx), scope, rows, protocol.ProjectionFrom(ctx))
 	if err != nil {
 		return nil, 0, err
 	}

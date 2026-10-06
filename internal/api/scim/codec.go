@@ -5,12 +5,13 @@ import (
 
 	"github.com/gofrs/uuid"
 	"github.com/supabase-community/scim-go/pkg/core"
+	"github.com/supabase-community/scim-go/pkg/protocol"
 	"github.com/supabase/auth/internal/models"
 	"github.com/supabase/auth/internal/storage"
 )
 
 func (r *repository[T]) decodeOne(tx *storage.Connection, scope models.SCIMScope, row *models.SCIMResource) (T, error) {
-	items, err := r.decodeAll(tx, scope, []models.SCIMResource{*row}, nil)
+	items, err := r.decodeAll(tx, scope, []models.SCIMResource{*row}, protocol.Projection{})
 	if err != nil {
 		var zero T
 		return zero, err
@@ -18,14 +19,14 @@ func (r *repository[T]) decodeOne(tx *storage.Connection, scope models.SCIMScope
 	return items[0], nil
 }
 
-func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope, rows []models.SCIMResource, excluded []string) ([]T, error) {
+func (r *repository[T]) decodeAll(tx *storage.Connection, scope models.SCIMScope, rows []models.SCIMResource, projection protocol.Projection) ([]T, error) {
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		ids[i] = row.ID
 	}
 	elements := map[uuid.UUID]map[string]any{}
 	for _, ref := range r.references {
-		if ref.excluded(excluded) {
+		if !projection.Returns(ref.name()) {
 			continue
 		}
 		loaded, err := ref.load(tx, scope, ids, r.locations)
