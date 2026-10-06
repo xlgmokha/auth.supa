@@ -69,7 +69,7 @@ func (ref Reference) link(tx *storage.Connection, scope models.SCIMScope, source
 	for id := range have {
 		remove = append(remove, id)
 	}
-	if err := ref.admit(tx, scope, add); err != nil {
+	if err := ref.admit(tx, scope, source, add); err != nil {
 		return err
 	}
 	if err := scope.AddReferences(tx, source, ref.attribute, add); err != nil {
@@ -78,14 +78,36 @@ func (ref Reference) link(tx *storage.Connection, scope models.SCIMScope, source
 	return scope.RemoveReferences(tx, source, ref.attribute, remove)
 }
 
-func (ref Reference) admit(tx *storage.Connection, scope models.SCIMScope, targets []uuid.UUID) error {
+func (ref Reference) admit(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets []uuid.UUID) error {
 	types, err := scope.LockTargets(tx, targets)
 	if err != nil {
 		return err
 	}
+	nested := false
 	for _, target := range targets {
 		if !slices.Contains(ref.targets, types[target]) {
 			return scimerrors.ErrInvalidValue(strconv.Quote(target.String()) + " is not a valid " + ref.attribute + " value")
+		}
+		nested = nested || types[target] == scope.ResourceType
+	}
+	if !nested {
+		return nil
+	}
+	return ref.acyclic(tx, scope, source, targets)
+}
+
+func (ref Reference) acyclic(tx *storage.Connection, scope models.SCIMScope, source uuid.UUID, targets []uuid.UUID) error {
+	if err := scope.LockHierarchy(tx); err != nil {
+		return err
+	}
+	ancestors, err := scope.FindAncestorIDs(tx, source, ref.attribute)
+	if err != nil {
+		return err
+	}
+	ancestors = append(ancestors, source)
+	for _, target := range targets {
+		if slices.Contains(ancestors, target) {
+			return scimerrors.ErrInvalidValue(strconv.Quote(target.String()) + " would make " + ref.attribute + " cyclic")
 		}
 	}
 	return nil

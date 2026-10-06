@@ -421,6 +421,37 @@ func TestSCIMGroups(t *testing.T) {
 		require.Empty(t, c.group(t, group.ID).Members)
 	})
 
+	t.Run("nests a group in a group", func(t *testing.T) {
+		child := create(t)
+		parent := create(t)
+
+		require.Equal(t, http.StatusNoContent, patch(t, parent.ID, map[string]any{"op": "add", "path": "members", "value": []core.Member{{Value: child.ID}}}).StatusCode)
+		require.Equal(t, []core.Member{{Value: child.ID, Ref: child.Meta.Location, Type: "Group"}}, c.group(t, parent.ID).Members)
+	})
+
+	t.Run("rejects cyclic members", func(t *testing.T) {
+		bottom := create(t)
+		middle := create(t)
+		top := create(t)
+		add := func(group, member core.Group) *http.Response {
+			return patch(t, group.ID, map[string]any{"op": "add", "path": "members", "value": []core.Member{{Value: member.ID}}})
+		}
+		require.Equal(t, http.StatusNoContent, add(top, middle).StatusCode)
+		require.Equal(t, http.StatusNoContent, add(middle, bottom).StatusCode)
+
+		for name, tc := range map[string]struct{ group, member core.Group }{
+			"self":     {bottom, bottom},
+			"parent":   {middle, top},
+			"ancestor": {bottom, top},
+		} {
+			t.Run(name, func(t *testing.T) {
+				res := add(tc.group, tc.member)
+				require.Equal(t, http.StatusBadRequest, res.StatusCode)
+				require.Contains(t, string(scimBody(t, res)), `"scimType":"invalidValue"`)
+			})
+		}
+	})
+
 	t.Run("GET omits members when excluded", func(t *testing.T) {
 		group := create(t, createUser(t))
 
