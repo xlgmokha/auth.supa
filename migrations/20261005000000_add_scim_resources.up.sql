@@ -23,9 +23,27 @@ create index if not exists scim_resources_type_id_idx
     where deleted_at is null;
 
 /* auth_migration: 20261005000000 */
-create index if not exists scim_resources_resource_idx
-    on {{ index .Options "Namespace" }}.scim_resources using gin (search jsonb_path_ops)
-    where deleted_at is null;
+do $$
+begin
+  begin
+    create extension if not exists btree_gin;
+  exception when others then
+    raise notice 'btree_gin is unavailable, the SCIM search index will not be scoped to a tenant: %', sqlerrm;
+  end;
+
+  if exists (select 1 from pg_extension where extname = 'btree_gin') then
+    execute format(
+      'create index if not exists scim_resources_resource_idx on %I.scim_resources using gin (sso_provider_id, search jsonb_path_ops) where deleted_at is null',
+      '{{ index .Options "Namespace" }}'
+    );
+  else
+    execute format(
+      'create index if not exists scim_resources_resource_idx on %I.scim_resources using gin (search jsonb_path_ops) where deleted_at is null',
+      '{{ index .Options "Namespace" }}'
+    );
+  end if;
+end;
+$$;
 
 /* auth_migration: 20261005000000 */
 do $$
