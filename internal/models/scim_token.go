@@ -21,6 +21,8 @@ const (
 	scimTokenBytes        = 20
 	scimTokenPrefixLength = len(scimTokenMarker) + 7
 
+	scimTokenTouchInterval = time.Minute
+
 	activeSCIMClause = "revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())"
 )
 
@@ -98,23 +100,12 @@ func RevokeSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMTok
 func AuthenticateSCIMToken(tx *storage.Connection, plaintext string) (*SCIMToken, error) {
 	token := &SCIMToken{}
 	if err := tx.RawQuery(
-		fmt.Sprintf(`WITH authenticated AS (
-  SELECT t.* FROM %[1]q AS t
-  JOIN %[2]q AS p ON p.id = t.sso_provider_id
-  JOIN %[3]q AS s ON s.sso_provider_id = t.sso_provider_id AND s.enabled
-  WHERE (p.disabled IS NULL OR p.disabled = false)
-    AND t.token_hash = ?
-    AND %[4]s
-), touched AS (
-  UPDATE %[1]q AS t SET last_used_at = now()
-  FROM authenticated AS a
-  WHERE t.id = a.id
-    AND (a.last_used_at IS NULL OR a.last_used_at < now() - interval '1 minute')
-  RETURNING t.*
-)
-SELECT * FROM touched
-UNION ALL
-SELECT * FROM authenticated WHERE NOT EXISTS (SELECT 1 FROM touched)`, token.TableName(), SSOProvider{}.TableName(), SCIMSettings{}.TableName(), activeSCIMClause),
+		fmt.Sprintf(`SELECT t.* FROM %[1]q AS t
+JOIN %[2]q AS p ON p.id = t.sso_provider_id
+JOIN %[3]q AS s ON s.sso_provider_id = t.sso_provider_id AND s.enabled
+WHERE (p.disabled IS NULL OR p.disabled = false)
+  AND t.token_hash = ?
+  AND %[4]s`, token.TableName(), SSOProvider{}.TableName(), SCIMSettings{}.TableName(), activeSCIMClause),
 		hashSCIMToken(plaintext),
 	).First(token); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -122,7 +113,26 @@ SELECT * FROM authenticated WHERE NOT EXISTS (SELECT 1 FROM touched)`, token.Tab
 		}
 		return nil, errors.Wrap(err, "error authenticating SCIM token")
 	}
+	if token.LastUsedAt == nil || time.Since(*token.LastUsedAt) > scimTokenTouchInterval {
+		return token, touchSCIMToken(tx, token)
+	}
 	return token, nil
+}
+
+// touchSCIMToken records last_used_at at most once per interval. SKIP LOCKED means a request never waits on
+// another request's write: whoever loses the race leaves the stamp to the winner.
+func touchSCIMToken(tx *storage.Connection, token *SCIMToken) error {
+	err := tx.RawQuery(
+		fmt.Sprintf(`UPDATE %[1]q SET last_used_at = now() WHERE id IN (
+  SELECT id FROM %[1]q WHERE id = ? AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
+  FOR UPDATE SKIP LOCKED
+) RETURNING *`, token.TableName()),
+		token.ID,
+	).First(token)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return errors.Wrap(err, "error recording SCIM token use")
+	}
+	return nil
 }
 
 func findSCIMTokens(tx *storage.Connection, where string, providerID uuid.UUID) ([]SCIMToken, error) {
