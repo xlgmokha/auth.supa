@@ -1531,6 +1531,41 @@ func TestSCIMQuery(t *testing.T) {
 			}
 		})
 
+		t.Run("Negated substring filters do not depend on needle length", func(t *testing.T) {
+			c := newSCIMClient(t, nil)
+			named := newSCIMUser(scimUserName("named"), "Barbara", "Jensen")
+			named["displayName"] = "abcdef"
+			other := newSCIMUser(scimUserName("other"), "Barbara", "Jensen")
+			other["displayName"] = "xyzxyz"
+			unnamed := newSCIMUser(scimUserName("unnamed"), "Barbara", "Jensen")
+			delete(unnamed, "displayName")
+			namedID := scimCreate[core.User](t, c, scimUsersPath, named).ID
+			otherID := scimCreate[core.User](t, c, scimUsersPath, other).ID
+			unnamedID := scimCreate[core.User](t, c, scimUsersPath, unnamed).ID
+			scoped := func(filter string) []string {
+				all := scimIDs(t, c, scimUsersPath, url.Values{"filter": {filter}})
+				var mine []string
+				for _, id := range all {
+					if id == namedID || id == otherID || id == unnamedID {
+						mine = append(mine, id)
+					}
+				}
+				return mine
+			}
+			// Three runes narrow through the trigram index, two do not. A user without the attribute is kept either way.
+			for _, tc := range []struct {
+				long, short string
+				want        []string
+			}{
+				{`not (displayName co "xyz")`, `not (displayName co "xy")`, []string{namedID, unnamedID}},
+				{`not (displayName sw "abc")`, `not (displayName sw "ab")`, []string{otherID, unnamedID}},
+				{`not (displayName ew "def")`, `not (displayName ew "ef")`, []string{otherID, unnamedID}},
+			} {
+				require.ElementsMatch(t, tc.want, scoped(tc.long), tc.long)
+				require.ElementsMatch(t, tc.want, scoped(tc.short), tc.short)
+			}
+		})
+
 		t.Run("Value path matches within one value", func(t *testing.T) {
 			c := newSCIMClient(t, nil)
 			tag := uuid.NewV7().String()

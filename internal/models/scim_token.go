@@ -11,6 +11,7 @@ import (
 
 	"github.com/gobuffalo/pop/v6"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"github.com/supabase/auth/internal/storage"
 	"github.com/supabase/auth/internal/utilities"
 )
@@ -20,8 +21,6 @@ const (
 
 	scimTokenBytes        = 20
 	scimTokenPrefixLength = len(scimTokenMarker) + 7
-
-	scimTokenTouchInterval = time.Minute
 
 	activeSCIMClause = "revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())"
 )
@@ -98,23 +97,31 @@ func RevokeSCIMToken(tx *storage.Connection, providerID, id uuid.UUID) (*SCIMTok
 }
 
 func AuthenticateSCIMToken(tx *storage.Connection, plaintext string) (*SCIMToken, error) {
-	token := &SCIMToken{}
+	row := &struct {
+		SCIMToken
+		TouchDue bool `db:"touch_due"`
+	}{}
 	if err := tx.RawQuery(
-		fmt.Sprintf(`SELECT t.* FROM %[1]q AS t
+		fmt.Sprintf(`SELECT t.*, (t.last_used_at IS NULL OR t.last_used_at < now() - interval '1 minute') AS touch_due
+FROM %[1]q AS t
 JOIN %[2]q AS p ON p.id = t.sso_provider_id
 JOIN %[3]q AS s ON s.sso_provider_id = t.sso_provider_id AND s.enabled
 WHERE (p.disabled IS NULL OR p.disabled = false)
   AND t.token_hash = ?
-  AND %[4]s`, token.TableName(), SSOProvider{}.TableName(), SCIMSettings{}.TableName(), activeSCIMClause),
+  AND %[4]s`, row.TableName(), SSOProvider{}.TableName(), SCIMSettings{}.TableName(), activeSCIMClause),
 		hashSCIMToken(plaintext),
-	).First(token); err != nil {
+	).First(row); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, SCIMNotFoundError{}
 		}
 		return nil, errors.Wrap(err, "error authenticating SCIM token")
 	}
-	if token.LastUsedAt == nil || time.Since(*token.LastUsedAt) > scimTokenTouchInterval {
-		return token, touchSCIMToken(tx, token)
+	token := &row.SCIMToken
+	if row.TouchDue {
+		// The stamp is bookkeeping: a request that authenticated must not fail because it could not be recorded.
+		if err := touchSCIMToken(tx, token); err != nil {
+			logrus.WithError(err).WithField("scim_token_id", token.ID).Warn("could not record SCIM token use")
+		}
 	}
 	return token, nil
 }

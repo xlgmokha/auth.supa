@@ -108,6 +108,20 @@ func (ts *SCIMTokenTestSuite) TestAuthenticate() {
 	require.True(ts.T(), stale.LastUsedAt.After(first.Add(-time.Minute)))
 }
 
+func (ts *SCIMTokenTestSuite) TestAuthenticateSurvivesFailedTouch() {
+	token, plaintext := ts.createToken(nil)
+	require.NoError(ts.T(), ts.db.RawQuery(`CREATE FUNCTION scim_tokens_test_fail() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'touch failed'; END $$ LANGUAGE plpgsql`).Exec())
+	require.NoError(ts.T(), ts.db.RawQuery(`CREATE TRIGGER scim_tokens_test_fail BEFORE UPDATE ON scim_tokens FOR EACH ROW EXECUTE FUNCTION scim_tokens_test_fail()`).Exec())
+	defer func() {
+		require.NoError(ts.T(), ts.db.RawQuery(`DROP TRIGGER scim_tokens_test_fail ON scim_tokens`).Exec())
+		require.NoError(ts.T(), ts.db.RawQuery(`DROP FUNCTION scim_tokens_test_fail()`).Exec())
+	}()
+
+	authenticated, err := AuthenticateSCIMToken(ts.db, plaintext)
+	require.NoError(ts.T(), err)
+	require.Equal(ts.T(), token.ID, authenticated.ID)
+}
+
 func (ts *SCIMTokenTestSuite) TestAuthenticateRejects() {
 	for _, tc := range []struct {
 		name  string
