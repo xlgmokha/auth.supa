@@ -1488,6 +1488,49 @@ func TestSCIMQuery(t *testing.T) {
 			}
 		})
 
+		t.Run("Substring filters match the needle literally", func(t *testing.T) {
+			c := newSCIMClient(t, nil)
+			create := func(userName, familyName string) string {
+				return scimCreate[core.User](t, c, scimUsersPath, newSCIMUser(userName, "Barbara", familyName)).ID
+			}
+			percent := create("100%_off@example.com", "100% Done")
+			plain := create("100x-off@example.com", "100x Done")
+			slash := create(`back\slash@example.com`, "Jensen")
+			quote := create(`q"uote@example.com`, "Jensen")
+			accent := create("\u00c9cole@example.com", "Jensen")
+			everyone := []string{percent, plain, slash, quote, accent}
+
+			for _, tc := range []struct {
+				filter string
+				want   []string
+			}{
+				// LIKE wildcards in the needle are literal.
+				{`userName co "100%_o"`, []string{percent}},
+				{`userName co "00_o"`, nil},
+				{`name.familyName sw "100%"`, []string{percent}},
+				{`name.familyName co "% d"`, []string{percent}},
+				{`name.familyName ew "x done"`, []string{plain}},
+				// JSON escapes in the stored document are modelled.
+				{`userName co "back\\slash"`, []string{slash}},
+				{`userName ew "slash@example.com"`, []string{slash}},
+				{`userName co "q\"uote"`, []string{quote}},
+				{`userName ew "off@example.com"`, []string{percent, plain}},
+				{`userName ew "ash@example.co"`, nil},
+				// Matching is case-insensitive for userName.
+				{`userName co "\u00e9cole"`, []string{accent}},
+				{`userName co "\u00c9COLE@"`, []string{accent}},
+				// Needles under three characters skip the narrowing and still match.
+				{`userName co "00"`, []string{percent, plain}},
+				// The narrowing composes with not and or.
+				{`not (userName co "100%_o")`, []string{plain, slash, quote, accent}},
+				{`userName co "back\\slash" or userName co "q\"uote"`, []string{slash, quote}},
+				{`userName co "off@" and name.familyName sw "100x"`, []string{plain}},
+				{`userName co "@example.com"`, everyone},
+			} {
+				require.ElementsMatch(t, tc.want, scimIDs(t, c, scimUsersPath, url.Values{"filter": {tc.filter}}), tc.filter)
+			}
+		})
+
 		t.Run("Value path matches within one value", func(t *testing.T) {
 			c := newSCIMClient(t, nil)
 			tag := uuid.NewV7().String()

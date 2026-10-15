@@ -28,6 +28,35 @@ create index if not exists scim_resources_resource_idx
     where deleted_at is null;
 
 /* auth_migration: 20261005000000 */
+do $$
+declare
+  trgm_schema text;
+begin
+  select n.nspname into trgm_schema
+  from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+  where e.extname = 'pg_trgm';
+
+  if trgm_schema is null then
+    begin
+      create extension if not exists pg_trgm;
+    exception when others then
+      raise notice 'pg_trgm is unavailable, SCIM co, sw and ew filters will scan: %', sqlerrm;
+    end;
+    select n.nspname into trgm_schema
+    from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+    where e.extname = 'pg_trgm';
+  end if;
+
+  if trgm_schema is not null then
+    execute format(
+      'create index if not exists scim_resources_text_idx on %I.scim_resources using gin ((lower(resource::text)) %I.gin_trgm_ops) where deleted_at is null',
+      '{{ index .Options "Namespace" }}', trgm_schema
+    );
+  end if;
+end;
+$$;
+
+/* auth_migration: 20261005000000 */
 create table if not exists {{ index .Options "Namespace" }}.scim_resource_references (
     sso_provider_id uuid not null,
     source_id uuid not null,

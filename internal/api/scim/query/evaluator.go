@@ -81,7 +81,11 @@ func (e evaluator) assigned(f field, op filter.Operator, value any) (Clause, err
 			return clause, nil
 		}
 	}
-	return f.match(op, value)
+	clause, err := f.match(op, value)
+	if err != nil {
+		return nil, err
+	}
+	return substring(clause, f, op, value), nil
 }
 
 func (e evaluator) relativeLocation(value any) string {
